@@ -1,0 +1,576 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── USERS & AUTH ───────────────────────────────────────────────────────────
+
+enum Role {
+  OWNER
+  MANAGER
+  ACCOUNTANT
+  STAFF
+  WORKER
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  password      String
+  role          Role      @default(STAFF)
+  languagePref  String    @default("en")
+  phone         String?
+  active        Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  assignedStages  ManufacturingStageWorker[]
+  createdBatches  RoughBatch[]
+  stockMovements  StockMovement[]
+}
+
+// ─── MASTER DATA ────────────────────────────────────────────────────────────
+
+model StoneType {
+  id            String   @id @default(cuid())
+  name          String   @unique
+  descriptionEn String?
+  descriptionHi String?
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  colors         StoneColor[]
+  inventoryItems InventoryItem[]
+}
+
+model StoneShape {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  inventoryItems InventoryItem[]
+}
+
+model StoneSize {
+  id        String   @id @default(cuid())
+  label     String   @unique
+  lengthMm  Float
+  widthMm   Float
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  inventoryItems InventoryItem[]
+}
+
+model StoneColor {
+  id          String    @id @default(cuid())
+  name        String
+  hexCode     String?
+  stoneTypeId String
+  stoneType   StoneType @relation(fields: [stoneTypeId], references: [id])
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+
+  inventoryItems InventoryItem[]
+}
+
+model StoneGrade {
+  id        String   @id @default(cuid())
+  label     String   @unique
+  sortOrder Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  inventoryItems InventoryItem[]
+}
+
+// ─── MANUFACTURING ───────────────────────────────────────────────────────────
+
+enum ManufacturingStageType {
+  ROUGH_COLLECTION
+  CUTTING
+  SHAPING
+  POLISHING
+  INVENTORY_IN
+}
+
+model RoughBatch {
+  id           String   @id @default(cuid())
+  batchNo      String   @unique
+  stoneType    String?
+  purchaseType String   @default("ROUGH_COLLECTION")
+  supplierName String
+  purchaseDate DateTime
+  weightGrams  Float
+  weightCarats Float
+  costAmount   Float
+  currency     String   @default("INR")
+  notes        String?
+  createdById  String
+  createdBy    User     @relation(fields: [createdById], references: [id])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  stages        ManufacturingStage[]
+  purchaseOrder PurchaseOrder?
+}
+
+model ManufacturingStage {
+  id        String                 @id @default(cuid())
+  batchId   String
+  batch     RoughBatch             @relation(fields: [batchId], references: [id])
+  stage     ManufacturingStageType
+  entryDate DateTime
+  exitDate  DateTime?
+  weightIn  Float
+  weightOut Float?
+  piecesIn  Int?
+  piecesOut Int?
+  notes     String?
+  createdAt DateTime               @default(now())
+  updatedAt DateTime               @updatedAt
+
+  workers         ManufacturingStageWorker[]
+  polishingRecord PolishingRecord?
+}
+
+model ManufacturingStageWorker {
+  id      String             @id @default(cuid())
+  stageId String
+  stage   ManufacturingStage @relation(fields: [stageId], references: [id])
+  userId  String
+  user    User               @relation(fields: [userId], references: [id])
+
+  @@unique([stageId, userId])
+}
+
+model PolishingVendor {
+  id              String   @id @default(cuid())
+  name            String
+  contactPhone    String?
+  phoneWhatsapp   String?
+  address         String?
+  city            String?
+  specialization  String?
+  active          Boolean  @default(true)
+  notifyWhatsapp  Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  records PolishingRecord[]
+}
+
+model PolishingRecord {
+  id                String             @id @default(cuid())
+  stageId           String             @unique
+  stage             ManufacturingStage @relation(fields: [stageId], references: [id])
+  vendorId          String
+  vendor            PolishingVendor    @relation(fields: [vendorId], references: [id])
+  dateSent          DateTime
+  dateReceived      DateTime?
+  costAmount        Float?
+  currency          String             @default("INR")
+  qualityNotes      String?
+  completionStatus  String             @default("PENDING")
+  defectPieces      Int                @default(0)
+  defectNotes       String?
+  paidAmount        Float              @default(0)
+  paidDate          DateTime?
+  createdAt         DateTime           @default(now())
+}
+
+// ─── PURCHASE ORDERS ─────────────────────────────────────────────────────────
+
+enum POStatus {
+  DRAFT
+  APPROVED
+  DELIVERED
+  PAID
+}
+
+model PurchaseOrder {
+  id           String     @id @default(cuid())
+  poNumber     String     @unique
+  batchId      String     @unique
+  batch        RoughBatch @relation(fields: [batchId], references: [id])
+  status       POStatus   @default(DRAFT)
+  supplierName String
+  supplierAddr String?
+  stoneType    String
+  weightGrams  Float
+  weightCarats Float
+  pricePerUnit Float
+  totalAmount  Float
+  currency     String     @default("INR")
+  paymentTerms String?
+  notes        String?
+  approvedAt   DateTime?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+}
+
+// ─── INVENTORY ───────────────────────────────────────────────────────────────
+
+model InventoryItem {
+  id                    String     @id @default(cuid())
+  sku                   String     @unique
+  stoneTypeId           String
+  stoneType             StoneType  @relation(fields: [stoneTypeId], references: [id])
+  shapeId               String
+  shape                 StoneShape @relation(fields: [shapeId], references: [id])
+  sizeId                String
+  size                  StoneSize  @relation(fields: [sizeId], references: [id])
+  colorId               String
+  color                 StoneColor @relation(fields: [colorId], references: [id])
+  gradeId               String
+  grade                 StoneGrade @relation(fields: [gradeId], references: [id])
+  qtyPieces             Int        @default(0)
+  weightPerPieceGrams   Float?
+  weightPerPieceCarats  Float?
+  costPricePerPiece     Float?
+  sellingPriceEstimated Float?
+  currency              String     @default("INR")
+  locationCabinet       String?
+  locationTray          String?
+  locationCompartment   String?
+  lowStockThreshold     Int        @default(10)
+  catalogVisible        Boolean    @default(false)
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+
+  images           ItemImage[]
+  stockMovements   StockMovement[]
+  consignmentLines ConsignmentLine[]
+  directSaleLines  DirectSaleLine[]
+}
+
+enum MovementType {
+  STOCK_IN_MANUFACTURING
+  STOCK_IN_PURCHASE
+  STOCK_OUT_CONSIGNMENT
+  STOCK_OUT_DIRECT_SALE
+  RETURN_FROM_BROKER
+  ADJUSTMENT
+}
+
+model StockMovement {
+  id            String        @id @default(cuid())
+  itemId        String
+  item          InventoryItem @relation(fields: [itemId], references: [id])
+  movementType  MovementType
+  qtyChange     Int
+  referenceId   String?
+  referenceType String?
+  notes         String?
+  createdById   String
+  createdBy     User          @relation(fields: [createdById], references: [id])
+  createdAt     DateTime      @default(now())
+}
+
+model ItemImage {
+  id        String        @id @default(cuid())
+  itemId    String
+  item      InventoryItem @relation(fields: [itemId], references: [id])
+  url       String
+  publicId  String?
+  sortOrder Int           @default(0)
+  isPrimary Boolean       @default(false)
+  createdAt DateTime      @default(now())
+}
+
+// ─── BROKERS & CUSTOMERS ────────────────────────────────────────────────────
+
+model Broker {
+  id                 String   @id @default(cuid())
+  name               String
+  phoneWhatsapp      String?
+  contactPhone       String?
+  address            String?
+  city               String?
+  defaultPaymentDays Int      @default(90)
+  active             Boolean  @default(true)
+  notifyWhatsapp     Boolean  @default(true)
+  notes              String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  consignments Consignment[]
+}
+
+model Customer {
+  id            String   @id @default(cuid())
+  name          String
+  phoneWhatsapp String?
+  contactPhone  String?
+  address       String?
+  city          String?
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  directSales DirectSale[]
+}
+
+// ─── SALES — CONSIGNMENT ────────────────────────────────────────────────────
+
+enum ConsignmentStatus {
+  DRAFT
+  ACTIVE
+  PARTIALLY_RETURNED
+  FULLY_SOLD
+  CLOSED
+}
+
+model Consignment {
+  id            String            @id @default(cuid())
+  consignmentNo String            @unique
+  brokerId      String
+  broker        Broker            @relation(fields: [brokerId], references: [id])
+  date          DateTime
+  status        ConsignmentStatus @default(DRAFT)
+  notes         String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  lines    ConsignmentLine[]
+  invoices Invoice[]
+}
+
+model ConsignmentLine {
+  id                 String        @id @default(cuid())
+  consignmentId      String
+  consignment        Consignment   @relation(fields: [consignmentId], references: [id])
+  itemId             String
+  item               InventoryItem @relation(fields: [itemId], references: [id])
+  qtyIssued          Int
+  qtyReturned        Int           @default(0)
+  qtySold            Int           @default(0)
+  estPricePerUnit    Float
+  actualPricePerUnit Float?
+  currency           String        @default("INR")
+  // JSON: { unit:"PC"|"WEIGHT"|"BOTH", weightUnit:"g"|"ct"|"kg", weightIssued:0, weightSold:0, weightReturned:0, notes:"" }
+  meta               String?
+  createdAt          DateTime      @default(now())
+}
+
+// ─── SALES — DIRECT ─────────────────────────────────────────────────────────
+
+enum DirectSaleStatus {
+  COMPLETED
+  PARTIALLY_PAID
+  PAID
+}
+
+model DirectSale {
+  id         String           @id @default(cuid())
+  saleNo     String           @unique
+  customerId String
+  customer   Customer         @relation(fields: [customerId], references: [id])
+  date       DateTime
+  status     DirectSaleStatus @default(COMPLETED)
+  notes      String?
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  lines    DirectSaleLine[]
+  invoices Invoice[]
+}
+
+model DirectSaleLine {
+  id           String        @id @default(cuid())
+  saleId       String
+  sale         DirectSale    @relation(fields: [saleId], references: [id])
+  itemId       String
+  item         InventoryItem @relation(fields: [itemId], references: [id])
+  qty          Int
+  pricePerUnit Float
+  currency     String        @default("INR")
+  createdAt    DateTime      @default(now())
+}
+
+// ─── INVOICES & PAYMENTS ────────────────────────────────────────────────────
+
+enum InvoiceType {
+  CONSIGNMENT
+  DIRECT_SALE
+}
+
+enum PaymentStatus {
+  PENDING
+  PARTIAL
+  PAID
+  OVERDUE
+}
+
+model Invoice {
+  id            String       @id @default(cuid())
+  invoiceNo     String       @unique
+  type          InvoiceType
+  consignmentId String?
+  consignment   Consignment? @relation(fields: [consignmentId], references: [id])
+  directSaleId  String?
+  directSale    DirectSale?  @relation(fields: [directSaleId], references: [id])
+  amountTotal   Float
+  amountPaid    Float        @default(0)
+  currency      String       @default("INR")
+  paymentDays   Int          @default(90)
+  dueDate       DateTime
+  status        PaymentStatus @default(PENDING)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  payments Payment[]
+}
+
+enum PaymentMode {
+  CASH
+  BANK_TRANSFER
+  UPI
+  CHEQUE
+  OTHER
+}
+
+model Payment {
+  id          String      @id @default(cuid())
+  invoiceId   String
+  invoice     Invoice     @relation(fields: [invoiceId], references: [id])
+  amount      Float
+  currency    String      @default("INR")
+  paymentDate DateTime
+  mode        PaymentMode @default(CASH)
+  notes       String?
+  createdAt   DateTime    @default(now())
+}
+
+// ─── WORKERS ────────────────────────────────────────────────────────────────
+
+enum WorkerPayType {
+  PER_PIECE
+  DAILY_WAGES
+  MIXED
+}
+
+model Worker {
+  id               String        @id @default(cuid())
+  name             String
+  phone            String?
+  address          String?
+  city             String?
+  payType          WorkerPayType @default(DAILY_WAGES)
+  dailyWageRate    Float?
+  settlementCycle  String        @default("MONTHLY") // WEEKLY | MONTHLY | PER_WORK
+  joinDate         DateTime?
+  active           Boolean       @default(true)
+  notifyWhatsapp   Boolean       @default(true)
+  departments      String        @default("[]") // JSON array e.g. ["Cutting","Polishing"]
+  notes            String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  pieceRates  WorkerPieceRate[]
+  attendance  WorkerAttendance[]
+  pieceWork   WorkerPieceWork[]
+  settlements WorkerSettlement[]
+}
+
+model WorkerSettlement {
+  id          String   @id @default(cuid())
+  workerId    String
+  worker      Worker   @relation(fields: [workerId], references: [id])
+  fromDate    DateTime @db.Date
+  toDate      DateTime @db.Date
+  daysPresent Int      @default(0)
+  halfDays    Int      @default(0)
+  totalPieces Int      @default(0)
+  wagesAmount Float    @default(0)
+  pieceAmount Float    @default(0)
+  totalAmount  Float
+  paidAmount   Float
+  notes        String?
+  settledBy    String?    // name of the person who settled
+  paymentMode  String     @default("CASH")  // CASH | UPI | BANK_TRANSFER | CHEQUE
+  paymentDate  DateTime?  @db.Date
+  createdAt    DateTime   @default(now())
+}
+
+model WorkerPieceRate {
+  id           String   @id @default(cuid())
+  workerId     String
+  worker       Worker   @relation(fields: [workerId], references: [id])
+  stoneType    String
+  shape        String
+  size         String
+  ratePerPiece Float
+  currency     String   @default("INR")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([workerId, stoneType, shape, size])
+}
+
+model WorkerAttendance {
+  id        String   @id @default(cuid())
+  workerId  String
+  worker    Worker   @relation(fields: [workerId], references: [id])
+  date      DateTime @db.Date
+  status    String
+  notes     String?
+  createdAt DateTime @default(now())
+
+  @@unique([workerId, date])
+}
+
+model WorkerPieceWork {
+  id              String   @id @default(cuid())
+  workerId        String
+  worker          Worker   @relation(fields: [workerId], references: [id])
+  date            DateTime @db.Date
+  stoneType       String
+  shape           String
+  size            String
+  piecesCompleted Int
+  ratePerPiece    Float
+  currency        String   @default("INR")
+  notes           String?
+  createdAt       DateTime @default(now())
+}
+
+// ─── CATALOG / SITE SETTINGS ─────────────────────────────────────────────────
+
+model SiteSettings {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String   @db.Text
+  updatedAt DateTime @updatedAt
+}
+
+// ─── PASSWORD RESET ──────────────────────────────────────────────────────────
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  email     String
+  token     String   @unique
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+// ─── WHATSAPP NOTIFICATIONS ──────────────────────────────────────────────────
+
+model WhatsappNotification {
+  id             String    @id @default(cuid())
+  recipientPhone String
+  message        String
+  status         String    @default("PENDING")
+  referenceId    String?
+  referenceType  String?
+  sentAt         DateTime?
+  errorMessage   String?
+  createdAt      DateTime  @default(now())
+}
