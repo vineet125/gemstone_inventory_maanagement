@@ -573,10 +573,11 @@ function PieceWorkModal({
             <h2 className="font-bold text-foreground text-lg">Record Work</h2>
             <p className="text-sm text-muted-foreground">{workerName} — {format(parseISO(date), "dd MMM yyyy")}</p>
           </div>
-          <button onClick={onClose} className="text-muted-foreground/60 hover:text-muted-foreground text-xl">✕</button>
+          <button onClick={onClose} disabled={saving} className="text-muted-foreground/60 hover:text-muted-foreground text-xl disabled:pointer-events-none disabled:opacity-40">✕</button>
         </div>
 
         <form onSubmit={submit} className="p-5 space-y-4">
+          <div className={`space-y-4${saving ? " pointer-events-none opacity-50 select-none" : ""}`}>
           {/* Operation */}
           <div>
             <label className="block text-xs font-semibold text-muted-foreground mb-1.5">Operation *</label>
@@ -687,14 +688,21 @@ function PieceWorkModal({
           </div>
 
           {error && <p className="text-sm text-red-600">{error}</p>}
+          </div>
 
           <div className="flex gap-3 pt-1">
-            <button type="button" onClick={onClose}
-              className="flex-1 rounded-lg border py-2.5 text-sm font-medium text-foreground hover:bg-accent">
+            <button type="button" onClick={onClose} disabled={saving}
+              className="flex-1 rounded-lg border py-2.5 text-sm font-medium text-foreground hover:bg-accent disabled:pointer-events-none disabled:opacity-40">
               Cancel
             </button>
             <button type="submit" disabled={saving}
-              className="flex-1 rounded-lg bg-amber-500 py-2.5 text-sm font-semibold text-white hover:bg-amber-600 disabled:opacity-50">
+              className="flex-1 rounded-lg bg-amber-500 py-2.5 text-sm font-semibold text-white hover:bg-amber-600 disabled:opacity-50 flex items-center justify-center gap-2">
+              {saving && (
+                <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+              )}
               {saving ? "Saving…" : "Save"}
             </button>
           </div>

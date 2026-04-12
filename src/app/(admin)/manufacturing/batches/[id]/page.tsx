@@ -511,7 +511,7 @@ export default function BatchDetailPage() {
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className={`grid grid-cols-2 gap-3${saving ? " pointer-events-none opacity-50 select-none" : ""}`}>
               <div className="col-span-2">
                 <label className="block text-sm font-medium text-foreground mb-1">Stage / Job Type *</label>
                 <select value={jobForm.stage} onChange={(e) => setJobForm({ ...jobForm, stage: e.target.value })}
@@ -697,9 +697,15 @@ export default function BatchDetailPage() {
             </div>
             <div className="mt-4 flex justify-end gap-2">
               <button onClick={() => { setShowJobForm(false); setEditingJobId(null); }}
-                className="rounded-lg border px-4 py-2 text-sm hover:bg-accent">Cancel</button>
+                disabled={saving} className="rounded-lg border px-4 py-2 text-sm hover:bg-accent disabled:pointer-events-none disabled:opacity-40">Cancel</button>
               <button onClick={saveJob} disabled={saving}
-                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60">
+                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60 flex items-center justify-center gap-2">
+                {saving && (
+                  <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                )}
                 {saving ? "Saving..." : editingJobId ? "Update Job" : "Add Job"}
               </button>
             </div>
@@ -714,7 +720,7 @@ export default function BatchDetailPage() {
             <p className="text-xs text-muted-foreground mb-4">Creates a sale without going through full manufacturing stages.</p>
 
             {/* Sale type toggle */}
-            <div className="flex rounded-lg border border-border overflow-hidden mb-4">
+            <div className={`flex rounded-lg border border-border overflow-hidden mb-4${sellSaving ? " pointer-events-none opacity-50 select-none" : ""}`}>
               {(["DIRECT", "CONSIGNMENT"] as const).map((t) => (
                 <button key={t}
                   onClick={() => setSellForm({ ...sellForm, saleType: t })}
@@ -728,7 +734,7 @@ export default function BatchDetailPage() {
               ))}
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className={`grid grid-cols-2 gap-3${sellSaving ? " pointer-events-none opacity-50 select-none" : ""}`}>
               <div className="col-span-2">
                 <label className="block text-xs font-medium text-foreground mb-1">Stone Type *</label>
                 <select value={sellForm.stoneTypeId}
@@ -835,9 +841,15 @@ export default function BatchDetailPage() {
 
             <div className="mt-4 flex justify-end gap-2">
               <button onClick={() => setShowSellModal(false)}
-                className="rounded-lg border px-4 py-2 text-sm hover:bg-accent">Cancel</button>
+                disabled={sellSaving} className="rounded-lg border px-4 py-2 text-sm hover:bg-accent disabled:pointer-events-none disabled:opacity-40">Cancel</button>
               <button onClick={submitSell} disabled={sellSaving}
-                className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-60">
+                className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-60 flex items-center justify-center gap-2">
+                {sellSaving && (
+                  <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                )}
                 {sellSaving ? "Creating..." : sellForm.saleType === "CONSIGNMENT" ? "Create Consignment" : "Create Sale"}
               </button>
             </div>

@@ -125,7 +125,7 @@ export default function DirectSalesPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-2xl rounded-xl bg-card p-6 shadow-xl max-h-[90vh] overflow-y-auto">
             <h2 className="text-lg font-semibold mb-4">New Direct Sale</h2>
-            <div className="grid grid-cols-2 gap-3 mb-4">
+            <div className={`grid grid-cols-2 gap-3 mb-4${saving ? " pointer-events-none opacity-50 select-none" : ""}`}>
               <div>
                 <label className="block text-sm font-medium text-foreground mb-1">Customer Name *</label>
                 <input value={form.customerName} onChange={(e) => setForm({ ...form, customerName: e.target.value })}
@@ -153,7 +153,7 @@ export default function DirectSalesPage() {
               </div>
             </div>
 
-            <div className="mb-3">
+            <div className={`mb-3${saving ? " pointer-events-none opacity-50 select-none" : ""}`}>
               <div className="flex items-center justify-between mb-2">
                 <label className="text-sm font-medium text-foreground">Items *</label>
                 <button onClick={() => setLines([...lines, { itemId: "", qty: 1, pricePerUnit: 0, currency: "INR" }])}
@@ -190,9 +190,15 @@ export default function DirectSalesPage() {
                 Total: ₹{lines.reduce((s, l) => s + l.qty * l.pricePerUnit, 0).toLocaleString("en-IN")}
               </p>
               <div className="flex gap-2">
-                <button onClick={() => setShowForm(false)} className="rounded-lg border px-4 py-2 text-sm hover:bg-accent">Cancel</button>
+                <button onClick={() => setShowForm(false)} disabled={saving} className="rounded-lg border px-4 py-2 text-sm hover:bg-accent disabled:pointer-events-none disabled:opacity-40">Cancel</button>
                 <button onClick={handleSave} disabled={saving}
-                  className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60">
+                  className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60 flex items-center justify-center gap-2">
+                  {saving && (
+                    <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                  )}
                   {saving ? "Creating..." : "Create Sale"}
                 </button>
               </div>

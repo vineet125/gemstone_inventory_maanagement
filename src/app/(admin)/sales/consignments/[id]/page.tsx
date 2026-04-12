@@ -23,7 +23,16 @@ const META_DEFAULTS: LineMeta = {
 
 function parseMeta(s: string | null | undefined): LineMeta {
   if (!s) return { ...META_DEFAULTS };
-  try { return { ...META_DEFAULTS, ...JSON.parse(s) }; }
+  try {
+    const parsed = JSON.parse(s);
+    // Bridge: lines created via the create form store { priceUnit, weightIssued }
+    // but not the unit/weightUnit fields used by this page. Infer them.
+    if (!parsed.unit && parsed.priceUnit === "per_ct" && (parsed.weightIssued ?? 0) > 0) {
+      parsed.unit = "WEIGHT";
+      parsed.weightUnit = parsed.weightUnit ?? "ct";
+    }
+    return { ...META_DEFAULTS, ...parsed };
+  }
   catch { return { ...META_DEFAULTS }; }
 }
 
@@ -109,6 +118,7 @@ export default function ConsignmentDetailPage() {
     lineId: string; sku: string;
     maxQty: number; maxWeight: number;
     meta: LineMeta; defaultPrice: number;
+    mode: "full" | "partial";
   } | null>(null);
   const [soldQty, setSoldQty] = useState(0);
   const [soldWeight, setSoldWeight] = useState<number | "">("");
@@ -118,6 +128,7 @@ export default function ConsignmentDetailPage() {
   const [returnModal, setReturnModal] = useState<{
     lineId: string; sku: string;
     maxQty: number; maxWeight: number; meta: LineMeta;
+    mode: "full" | "partial";
   } | null>(null);
   const [returnQty, setReturnQty] = useState(0);
   const [returnWeight, setReturnWeight] = useState<number | "">("");
@@ -158,16 +169,21 @@ export default function ConsignmentDetailPage() {
     const meta = soldModal.meta;
     const needsQty = meta.unit !== "WEIGHT";
     const needsWeight = meta.unit !== "PC";
-    if (needsQty && (!soldQty || soldQty < 1)) { toast.error("Enter qty sold"); return; }
-    if (needsWeight && (!soldWeight || Number(soldWeight) <= 0)) { toast.error("Enter weight sold"); return; }
+    const isFull = soldModal.mode === "full";
+    const actualQty = isFull ? soldModal.maxQty : soldQty;
+    const actualWeight = isFull ? soldModal.maxWeight : Number(soldWeight);
+    if (!isFull) {
+      if (needsQty && (!actualQty || actualQty < 1)) { toast.error("Enter qty sold"); return; }
+      if (needsWeight && (!actualWeight || actualWeight <= 0)) { toast.error("Enter weight sold"); return; }
+    }
     setSaving(true);
     const res = await fetch(`/api/sales/consignments/${id}`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         soldLines: [{
           lineId: soldModal.lineId,
-          qtySold: needsQty ? soldQty : 0,
-          ...(needsWeight && { weightSold: Number(soldWeight) }),
+          qtySold: needsQty ? actualQty : 0,
+          ...(needsWeight && { weightSold: actualWeight }),
           ...(soldPrice !== "" && { actualPricePerUnit: Number(soldPrice) }),
         }],
       }),
@@ -182,16 +198,21 @@ export default function ConsignmentDetailPage() {
     const meta = returnModal.meta;
     const needsQty = meta.unit !== "WEIGHT";
     const needsWeight = meta.unit !== "PC";
-    if (needsQty && (!returnQty || returnQty < 1)) { toast.error("Enter qty returned"); return; }
-    if (needsWeight && (!returnWeight || Number(returnWeight) <= 0)) { toast.error("Enter weight returned"); return; }
+    const isFull = returnModal.mode === "full";
+    const actualQty = isFull ? returnModal.maxQty : returnQty;
+    const actualWeight = isFull ? returnModal.maxWeight : Number(returnWeight);
+    if (!isFull) {
+      if (needsQty && (!actualQty || actualQty < 1)) { toast.error("Enter qty returned"); return; }
+      if (needsWeight && (!actualWeight || actualWeight <= 0)) { toast.error("Enter weight returned"); return; }
+    }
     setSaving(true);
     const res = await fetch(`/api/sales/consignments/${id}`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         returnLines: [{
           lineId: returnModal.lineId,
-          qtyReturned: needsQty ? returnQty : 0,
-          ...(needsWeight && { weightReturned: Number(returnWeight) }),
+          qtyReturned: needsQty ? actualQty : 0,
+          ...(needsWeight && { weightReturned: actualWeight }),
         }],
       }),
     });
@@ -245,10 +266,29 @@ export default function ConsignmentDetailPage() {
 
   const invoice = consignment.invoices[0];
   const outstanding = invoice ? invoice.amountTotal - invoice.amountPaid : 0;
-  const totalIssued   = consignment.lines.reduce((s, l) => s + l.qtyIssued, 0);
   const totalSold     = consignment.lines.reduce((s, l) => s + l.qtySold, 0);
-  const totalReturned = consignment.lines.reduce((s, l) => s + l.qtyReturned, 0);
-  const totalPending  = totalIssued - totalSold - totalReturned;
+
+  // Per-unit-type totals for KPI cards
+  const lineMetas = consignment.lines.map((l) => parseMeta(l.meta));
+  const pcIssued   = consignment.lines.reduce((s, l, i) => lineMetas[i].unit !== "WEIGHT" ? s + l.qtyIssued : s, 0);
+  const pcSold     = consignment.lines.reduce((s, l, i) => lineMetas[i].unit !== "WEIGHT" ? s + l.qtySold : s, 0);
+  const pcReturned = consignment.lines.reduce((s, l, i) => lineMetas[i].unit !== "WEIGHT" ? s + l.qtyReturned : s, 0);
+  const pcPending  = pcIssued - pcSold - pcReturned;
+  const wtTotals: Record<string, [number, number, number]> = {};
+  consignment.lines.forEach((l, i) => {
+    const meta = lineMetas[i];
+    if (meta.unit === "PC") return;
+    const u = meta.weightUnit;
+    if (!wtTotals[u]) wtTotals[u] = [0, 0, 0];
+    wtTotals[u][0] += meta.weightIssued;
+    wtTotals[u][1] += meta.weightSold;
+    wtTotals[u][2] += meta.weightReturned;
+  });
+  const wtUnits = Object.keys(wtTotals);
+  const hasWt = wtUnits.length > 0;
+  const hasPc = pcIssued > 0;
+  const fmtWt = (idx: 0 | 1 | 2) => wtUnits.map((u) => `${+wtTotals[u][idx].toFixed(3)}${u}`).join(" + ");
+  const fmtWtPending = () => wtUnits.map((u) => `${+(wtTotals[u][0] - wtTotals[u][1] - wtTotals[u][2]).toFixed(3)}${u}`).join(" + ");
 
   return (
     <div className="space-y-6">
@@ -278,21 +318,33 @@ export default function ConsignmentDetailPage() {
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <div className="rounded-xl border bg-card p-4 shadow-sm">
           <p className="text-xs text-muted-foreground">Total Issued</p>
-          <p className="text-2xl font-bold text-foreground">{totalIssued}</p>
+          {hasPc && <p className={`font-bold text-foreground ${hasWt ? "text-xl" : "text-2xl"}`}>{pcIssued} <span className="text-xs font-normal text-muted-foreground">pc</span></p>}
+          {hasWt && <p className={`font-bold text-foreground ${hasPc ? "text-base" : "text-2xl"}`}>{fmtWt(0)}</p>}
+          {!hasPc && !hasWt && <p className="text-2xl font-bold text-foreground">0</p>}
         </div>
         <div className="rounded-xl border bg-card p-4 shadow-sm">
           <p className="text-xs text-muted-foreground">Sold</p>
-          <p className="text-2xl font-bold text-green-600">{totalSold}</p>
+          {hasPc && <p className={`font-bold text-green-600 ${hasWt ? "text-xl" : "text-2xl"}`}>{pcSold} <span className="text-xs font-normal text-green-600/70">pc</span></p>}
+          {hasWt && <p className={`font-bold text-green-600 ${hasPc ? "text-base" : "text-2xl"}`}>{fmtWt(1)}</p>}
+          {!hasPc && !hasWt && <p className="text-2xl font-bold text-green-600">0</p>}
         </div>
         <div className="rounded-xl border bg-card p-4 shadow-sm">
           <p className="text-xs text-muted-foreground">Returned</p>
-          <p className="text-2xl font-bold text-yellow-600">{totalReturned}</p>
+          {hasPc && <p className={`font-bold text-yellow-600 ${hasWt ? "text-xl" : "text-2xl"}`}>{pcReturned} <span className="text-xs font-normal text-yellow-600/70">pc</span></p>}
+          {hasWt && <p className={`font-bold text-yellow-600 ${hasPc ? "text-base" : "text-2xl"}`}>{fmtWt(2)}</p>}
+          {!hasPc && !hasWt && <p className="text-2xl font-bold text-yellow-600">0</p>}
         </div>
         <div className="rounded-xl border bg-card p-4 shadow-sm">
-          <p className="text-xs text-muted-foreground">Pending (pc)</p>
-          <p className={`text-2xl font-bold ${totalPending < 0 ? "text-red-600" : totalPending === 0 ? "text-muted-foreground/60" : "text-blue-600"}`}>
-            {totalPending}
-          </p>
+          <p className="text-xs text-muted-foreground">Pending</p>
+          {hasPc && (
+            <p className={`font-bold ${pcPending < 0 ? "text-red-600" : pcPending === 0 && !hasWt ? "text-muted-foreground/60" : "text-blue-600"} ${hasWt ? "text-xl" : "text-2xl"}`}>
+              {pcPending} <span className="text-xs font-normal">pc</span>
+            </p>
+          )}
+          {hasWt && (
+            <p className={`font-bold text-blue-600 ${hasPc ? "text-base" : "text-2xl"}`}>{fmtWtPending()}</p>
+          )}
+          {!hasPc && !hasWt && <p className="text-2xl font-bold text-muted-foreground/60">0</p>}
         </div>
       </div>
 
@@ -428,7 +480,7 @@ export default function ConsignmentDetailPage() {
                               onClick={() => {
                                 const maxQty = line.qtyIssued - line.qtySold - line.qtyReturned;
                                 const maxWt = meta.weightIssued - meta.weightSold - meta.weightReturned;
-                                setSoldModal({ lineId: line.id, sku: line.item.sku, maxQty, maxWeight: maxWt, meta, defaultPrice: line.estPricePerUnit });
+                                setSoldModal({ lineId: line.id, sku: line.item.sku, maxQty, maxWeight: maxWt, meta, defaultPrice: line.estPricePerUnit, mode: "full" });
                                 setSoldQty(meta.unit !== "WEIGHT" ? maxQty : 0);
                                 setSoldWeight(meta.unit !== "PC" ? Number(maxWt.toFixed(3)) : "");
                                 setSoldPrice(line.actualPricePerUnit ?? line.estPricePerUnit);
@@ -440,7 +492,7 @@ export default function ConsignmentDetailPage() {
                               onClick={() => {
                                 const maxQty = line.qtyIssued - line.qtySold - line.qtyReturned;
                                 const maxWt = meta.weightIssued - meta.weightSold - meta.weightReturned;
-                                setReturnModal({ lineId: line.id, sku: line.item.sku, maxQty, maxWeight: maxWt, meta });
+                                setReturnModal({ lineId: line.id, sku: line.item.sku, maxQty, maxWeight: maxWt, meta, mode: "full" });
                                 setReturnQty(meta.unit !== "WEIGHT" ? maxQty : 0);
                                 setReturnWeight(meta.unit !== "PC" ? Number(maxWt.toFixed(3)) : "");
                               }}
@@ -480,32 +532,55 @@ export default function ConsignmentDetailPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-sm rounded-xl bg-card p-6 shadow-xl">
             <h2 className="text-lg font-semibold mb-1">Mark Items Sold</h2>
-            <p className="text-sm text-muted-foreground mb-4">
-              {soldModal.sku}
-              {soldModal.meta.unit === "PC" && ` — max ${soldModal.maxQty} pc`}
-              {soldModal.meta.unit === "WEIGHT" && ` — max ${soldModal.maxWeight.toFixed(3)}${soldModal.meta.weightUnit}`}
-              {soldModal.meta.unit === "BOTH" && ` — max ${soldModal.maxQty} pc / ${soldModal.maxWeight.toFixed(3)}${soldModal.meta.weightUnit}`}
-            </p>
-            <div className="space-y-3">
-              {soldModal.meta.unit !== "WEIGHT" && (
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-1">Qty Sold (pc) *</label>
-                  <input type="number" value={soldQty} onChange={(e) => setSoldQty(Number(e.target.value))}
-                    min={0} max={soldModal.maxQty}
-                    className="w-full rounded-lg border border-border px-3 py-2 text-sm" />
+            <p className="text-xs text-muted-foreground font-mono mb-4">{soldModal.sku}</p>
+
+            <div className={`${saving ? "pointer-events-none opacity-50 select-none" : ""}`}>
+              {/* Full / Partial toggle */}
+              <div className="flex rounded-lg border border-border overflow-hidden mb-4">
+                {(["full", "partial"] as const).map((m) => (
+                  <button key={m} type="button" onClick={() => setSoldModal((prev) => prev ? { ...prev, mode: m } : null)}
+                    className={`flex-1 py-2 text-sm font-semibold transition-colors ${soldModal.mode === m ? "bg-primary text-primary-foreground" : "bg-muted/40 text-muted-foreground hover:bg-accent"}`}>
+                    {m === "full" ? "Full Sale" : "Partial Sale"}
+                  </button>
+                ))}
+              </div>
+
+              {soldModal.mode === "full" ? (
+                <div className="rounded-lg bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-700 mb-4">
+                  Will mark as sold:{" "}
+                  <span className="font-bold">
+                    {soldModal.meta.unit === "PC" && `${soldModal.maxQty} pc`}
+                    {soldModal.meta.unit === "WEIGHT" && `${soldModal.maxWeight.toFixed(3)} ${soldModal.meta.weightUnit}`}
+                    {soldModal.meta.unit === "BOTH" && `${soldModal.maxQty} pc / ${soldModal.maxWeight.toFixed(3)} ${soldModal.meta.weightUnit}`}
+                  </span>
+                </div>
+              ) : (
+                <div className="space-y-3 mb-4">
+                  {soldModal.meta.unit !== "WEIGHT" && (
+                    <div>
+                      <label className="block text-sm font-medium text-foreground mb-1">
+                        Qty Sold (pc) * <span className="text-muted-foreground/60 font-normal">max {soldModal.maxQty}</span>
+                      </label>
+                      <input type="number" value={soldQty} onChange={(e) => setSoldQty(Number(e.target.value))}
+                        min={0} max={soldModal.maxQty}
+                        className="w-full rounded-lg border border-border px-3 py-2 text-sm" />
+                    </div>
+                  )}
+                  {soldModal.meta.unit !== "PC" && (
+                    <div>
+                      <label className="block text-sm font-medium text-foreground mb-1">
+                        Weight Sold ({soldModal.meta.weightUnit}) * <span className="text-muted-foreground/60 font-normal">max {soldModal.maxWeight.toFixed(3)}</span>
+                      </label>
+                      <input type="number" step="0.001" value={soldWeight}
+                        onChange={(e) => setSoldWeight(e.target.value === "" ? "" : Number(e.target.value))}
+                        min={0} max={soldModal.maxWeight}
+                        className="w-full rounded-lg border border-border px-3 py-2 text-sm" />
+                    </div>
+                  )}
                 </div>
               )}
-              {soldModal.meta.unit !== "PC" && (
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-1">
-                    Weight Sold ({soldModal.meta.weightUnit}) *
-                  </label>
-                  <input type="number" step="0.001" value={soldWeight}
-                    onChange={(e) => setSoldWeight(e.target.value === "" ? "" : Number(e.target.value))}
-                    min={0} max={soldModal.maxWeight}
-                    className="w-full rounded-lg border border-border px-3 py-2 text-sm" />
-                </div>
-              )}
+
+              {/* Price — always shown */}
               <div>
                 <label className="block text-sm font-medium text-foreground mb-1">
                   Actual Price / {soldModal.meta.unit === "WEIGHT" ? soldModal.meta.weightUnit : "pc"}{" "}
@@ -517,10 +592,17 @@ export default function ConsignmentDetailPage() {
                   placeholder={`Default: ₹${soldModal.defaultPrice.toLocaleString("en-IN")}`} />
               </div>
             </div>
+
             <div className="mt-5 flex gap-2 justify-end">
-              <button onClick={() => setSoldModal(null)} className="rounded-lg border px-4 py-2 text-sm hover:bg-accent">Cancel</button>
+              <button onClick={() => setSoldModal(null)} disabled={saving} className="rounded-lg border px-4 py-2 text-sm hover:bg-accent disabled:pointer-events-none disabled:opacity-40">Cancel</button>
               <button onClick={markSold} disabled={saving}
-                className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-60">
+                className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-60 flex items-center justify-center gap-2">
+                {saving && (
+                  <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                )}
                 {saving ? "Saving..." : "Confirm Sold"}
               </button>
             </div>
@@ -533,37 +615,65 @@ export default function ConsignmentDetailPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-sm rounded-xl bg-card p-6 shadow-xl">
             <h2 className="text-lg font-semibold mb-1">Return to Inventory</h2>
-            <p className="text-sm text-muted-foreground mb-4">
-              {returnModal.sku}
-              {returnModal.meta.unit === "PC" && ` — max ${returnModal.maxQty} pc`}
-              {returnModal.meta.unit === "WEIGHT" && ` — max ${returnModal.maxWeight.toFixed(3)}${returnModal.meta.weightUnit}`}
-              {returnModal.meta.unit === "BOTH" && ` — max ${returnModal.maxQty} pc / ${returnModal.maxWeight.toFixed(3)}${returnModal.meta.weightUnit}`}
-            </p>
-            <div className="space-y-3">
-              {returnModal.meta.unit !== "WEIGHT" && (
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-1">Qty Returned (pc) *</label>
-                  <input type="number" value={returnQty} onChange={(e) => setReturnQty(Number(e.target.value))}
-                    min={0} max={returnModal.maxQty}
-                    className="w-full rounded-lg border border-border px-3 py-2 text-sm" />
+            <p className="text-xs text-muted-foreground font-mono mb-4">{returnModal.sku}</p>
+
+            <div className={`${saving ? "pointer-events-none opacity-50 select-none" : ""}`}>
+              {/* Full / Partial toggle */}
+              <div className="flex rounded-lg border border-border overflow-hidden mb-4">
+                {(["full", "partial"] as const).map((m) => (
+                  <button key={m} type="button" onClick={() => setReturnModal((prev) => prev ? { ...prev, mode: m } : null)}
+                    className={`flex-1 py-2 text-sm font-semibold transition-colors ${returnModal.mode === m ? "bg-primary text-primary-foreground" : "bg-muted/40 text-muted-foreground hover:bg-accent"}`}>
+                    {m === "full" ? "Full Return" : "Partial Return"}
+                  </button>
+                ))}
+              </div>
+
+              {returnModal.mode === "full" ? (
+                <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-700 mb-4">
+                  Will return to inventory:{" "}
+                  <span className="font-bold">
+                    {returnModal.meta.unit === "PC" && `${returnModal.maxQty} pc`}
+                    {returnModal.meta.unit === "WEIGHT" && `${returnModal.maxWeight.toFixed(3)} ${returnModal.meta.weightUnit}`}
+                    {returnModal.meta.unit === "BOTH" && `${returnModal.maxQty} pc / ${returnModal.maxWeight.toFixed(3)} ${returnModal.meta.weightUnit}`}
+                  </span>
                 </div>
-              )}
-              {returnModal.meta.unit !== "PC" && (
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-1">
-                    Weight Returned ({returnModal.meta.weightUnit}) *
-                  </label>
-                  <input type="number" step="0.001" value={returnWeight}
-                    onChange={(e) => setReturnWeight(e.target.value === "" ? "" : Number(e.target.value))}
-                    min={0} max={returnModal.maxWeight}
-                    className="w-full rounded-lg border border-border px-3 py-2 text-sm" />
+              ) : (
+                <div className="space-y-3 mb-4">
+                  {returnModal.meta.unit !== "WEIGHT" && (
+                    <div>
+                      <label className="block text-sm font-medium text-foreground mb-1">
+                        Qty Returned (pc) * <span className="text-muted-foreground/60 font-normal">max {returnModal.maxQty}</span>
+                      </label>
+                      <input type="number" value={returnQty} onChange={(e) => setReturnQty(Number(e.target.value))}
+                        min={0} max={returnModal.maxQty}
+                        className="w-full rounded-lg border border-border px-3 py-2 text-sm" />
+                    </div>
+                  )}
+                  {returnModal.meta.unit !== "PC" && (
+                    <div>
+                      <label className="block text-sm font-medium text-foreground mb-1">
+                        Weight Returned ({returnModal.meta.weightUnit}) * <span className="text-muted-foreground/60 font-normal">max {returnModal.maxWeight.toFixed(3)}</span>
+                      </label>
+                      <input type="number" step="0.001" value={returnWeight}
+                        onChange={(e) => setReturnWeight(e.target.value === "" ? "" : Number(e.target.value))}
+                        min={0} max={returnModal.maxWeight}
+                        className="w-full rounded-lg border border-border px-3 py-2 text-sm" />
+                    </div>
+                  )}
                 </div>
               )}
             </div>
-            <div className="mt-5 flex gap-2 justify-end">
-              <button onClick={() => setReturnModal(null)} className="rounded-lg border px-4 py-2 text-sm hover:bg-accent">Cancel</button>
+
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setReturnModal(null)} disabled={saving} className="rounded-lg border px-4 py-2 text-sm hover:bg-accent disabled:pointer-events-none disabled:opacity-40">Cancel</button>
               <button onClick={markReturned} disabled={saving}
-                className="rounded-lg bg-yellow-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-60">
+                className="rounded-lg bg-yellow-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-60 flex items-center justify-center gap-2">
+                {saving && (
+                  <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                )}
                 {saving ? "Saving..." : "Confirm Return"}
               </button>
             </div>
@@ -577,7 +687,7 @@ export default function ConsignmentDetailPage() {
           <div className="w-full max-w-sm rounded-xl bg-card p-6 shadow-xl">
             <h2 className="text-lg font-semibold mb-1">Line Details</h2>
             <p className="text-sm text-muted-foreground mb-4">{editMetaModal.sku}</p>
-            <div className="space-y-4">
+            <div className={`space-y-4${saving ? " pointer-events-none opacity-50 select-none" : ""}`}>
               {/* Unit type */}
               <div>
                 <label className="block text-sm font-semibold text-foreground mb-2">Tracking Unit</label>
@@ -632,9 +742,15 @@ export default function ConsignmentDetailPage() {
               </div>
             </div>
             <div className="mt-5 flex gap-2 justify-end">
-              <button onClick={() => setEditMetaModal(null)} className="rounded-lg border px-4 py-2 text-sm hover:bg-accent">Cancel</button>
+              <button onClick={() => setEditMetaModal(null)} disabled={saving} className="rounded-lg border px-4 py-2 text-sm hover:bg-accent disabled:pointer-events-none disabled:opacity-40">Cancel</button>
               <button onClick={saveLineMeta} disabled={saving}
-                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60">
+                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60 flex items-center justify-center gap-2">
+                {saving && (
+                  <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                )}
                 {saving ? "Saving..." : "Save"}
               </button>
             </div>
@@ -647,7 +763,7 @@ export default function ConsignmentDetailPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-xs rounded-xl bg-card p-6 shadow-xl">
             <h2 className="text-lg font-semibold mb-4">Change Status</h2>
-            <div className="space-y-2">
+            <div className={`space-y-2${saving ? " pointer-events-none opacity-50 select-none" : ""}`}>
               {(["DRAFT", "ACTIVE", "PARTIALLY_RETURNED", "FULLY_SOLD", "CLOSED"] as const).map((s) => (
                 <button key={s} onClick={() => setNewStatus(s)}
                   className={`w-full rounded-lg px-4 py-2.5 text-sm font-medium text-left transition-colors ${newStatus === s ? "ring-2 ring-primary " : ""}${STATUS_COLORS[s] ?? "bg-gray-100 text-muted-foreground"}`}>
@@ -660,9 +776,15 @@ export default function ConsignmentDetailPage() {
               ))}
             </div>
             <div className="mt-5 flex gap-2 justify-end">
-              <button onClick={() => setStatusModal(false)} className="rounded-lg border px-4 py-2 text-sm hover:bg-accent">Cancel</button>
+              <button onClick={() => setStatusModal(false)} disabled={saving} className="rounded-lg border px-4 py-2 text-sm hover:bg-accent disabled:pointer-events-none disabled:opacity-40">Cancel</button>
               <button onClick={changeStatus} disabled={saving || newStatus === consignment.status}
-                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60">
+                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60 flex items-center justify-center gap-2">
+                {saving && (
+                  <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                )}
                 {saving ? "Saving..." : "Update"}
               </button>
             </div>
@@ -678,7 +800,7 @@ export default function ConsignmentDetailPage() {
             <p className="text-sm text-muted-foreground mb-4">
               {consignment.consignmentNo} · Outstanding ₹{outstanding.toLocaleString("en-IN")}
             </p>
-            <div className="space-y-3">
+            <div className={`space-y-3${saving ? " pointer-events-none opacity-50 select-none" : ""}`}>
               <div>
                 <label className="block text-sm font-medium text-foreground mb-1">Amount (₹) *</label>
                 <input type="number" value={paymentForm.amount}
@@ -705,9 +827,15 @@ export default function ConsignmentDetailPage() {
               </div>
             </div>
             <div className="mt-5 flex gap-2 justify-end">
-              <button onClick={() => setPaymentModal(false)} className="rounded-lg border px-4 py-2 text-sm hover:bg-accent">Cancel</button>
+              <button onClick={() => setPaymentModal(false)} disabled={saving} className="rounded-lg border px-4 py-2 text-sm hover:bg-accent disabled:pointer-events-none disabled:opacity-40">Cancel</button>
               <button onClick={recordPayment} disabled={saving || !paymentForm.amount}
-                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60">
+                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60 flex items-center justify-center gap-2">
+                {saving && (
+                  <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                )}
                 {saving ? "Recording..." : "Record"}
               </button>
             </div>

@@ -232,12 +232,35 @@ export default function InventoryPage() {
   const PAGE_SIZE = 10;
   const paginated = items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
+  const outOfStock = items.filter((i) => i.qtyPieces === 0 && i.weightPerPieceCarats == null && i.weightPerPieceGrams == null).length;
+  const lowStockCount = items.filter((i) => i.qtyPieces > 0 && i.qtyPieces <= i.lowStockThreshold).length;
+
+  const gradeColor = (label: string) => {
+    if (label === "AAA") return "bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200";
+    if (label === "AA") return "bg-blue-100 text-blue-700 ring-1 ring-blue-200";
+    if (label === "A") return "bg-amber-100 text-amber-700 ring-1 ring-amber-200";
+    return "bg-purple-100 text-purple-700 ring-1 ring-purple-200";
+  };
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      {/* Header */}
+      <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Inventory</h1>
-          <p className="text-sm text-muted-foreground mt-1">{items.length} SKUs</p>
+          <div className="flex items-center gap-4 mt-2">
+            <span className="text-sm text-muted-foreground">{items.length} SKUs total</span>
+            {outOfStock > 0 && (
+              <span className="inline-flex items-center gap-1 text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-full px-2.5 py-0.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-500" /> {outOfStock} out of stock
+              </span>
+            )}
+            {lowStockCount > 0 && (
+              <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-2.5 py-0.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500" /> {lowStockCount} low stock
+              </span>
+            )}
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <ExportButton
@@ -262,33 +285,39 @@ export default function InventoryPage() {
             label="Export"
           />
           <button onClick={() => setShowForm(true)}
-            className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90">
+            className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 shadow-sm">
             + Add Item (SKU)
           </button>
         </div>
       </div>
 
       {/* Filters */}
-      <div className="flex gap-3 flex-wrap items-center">
+      <div className="flex gap-2 flex-wrap items-center bg-muted/40 border border-border rounded-xl px-4 py-3">
         <select value={filters.typeId} onChange={(e) => setFilters({ ...filters, typeId: e.target.value })}
-          className="rounded-lg border border-border px-3 py-1.5 text-sm">
+          className="rounded-lg border border-border bg-background px-3 py-1.5 text-sm shadow-sm">
           <option value="">All Stone Types</option>
           {stoneTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
         </select>
         <select value={filters.shapeId} onChange={(e) => setFilters({ ...filters, shapeId: e.target.value })}
-          className="rounded-lg border border-border px-3 py-1.5 text-sm">
+          className="rounded-lg border border-border bg-background px-3 py-1.5 text-sm shadow-sm">
           <option value="">All Shapes</option>
           {shapes.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
         <select value={filters.gradeId} onChange={(e) => setFilters({ ...filters, gradeId: e.target.value })}
-          className="rounded-lg border border-border px-3 py-1.5 text-sm">
+          className="rounded-lg border border-border bg-background px-3 py-1.5 text-sm shadow-sm">
           <option value="">All Grades</option>
           {grades.map((g) => <option key={g.id} value={g.id}>{g.label}</option>)}
         </select>
-        <label className="flex items-center gap-1.5 text-sm cursor-pointer">
-          <input type="checkbox" checked={filters.lowStock} onChange={(e) => setFilters({ ...filters, lowStock: e.target.checked })} />
-          Low Stock Only
+        <label className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border cursor-pointer transition-colors ${filters.lowStock ? "bg-amber-50 border-amber-300 text-amber-700" : "bg-background border-border text-muted-foreground hover:bg-accent"}`}>
+          <input type="checkbox" className="hidden" checked={filters.lowStock} onChange={(e) => setFilters({ ...filters, lowStock: e.target.checked })} />
+          ⚠ Low Stock Only
         </label>
+        {(filters.typeId || filters.shapeId || filters.gradeId || filters.lowStock) && (
+          <button onClick={() => setFilters({ typeId: "", colorId: "", shapeId: "", gradeId: "", lowStock: false })}
+            className="text-xs text-muted-foreground hover:text-foreground underline ml-1">
+            Clear filters
+          </button>
+        )}
       </div>
 
       {/* Add Item Modal */}
@@ -296,7 +325,7 @@ export default function InventoryPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="w-full max-w-2xl rounded-xl bg-card p-6 shadow-xl max-h-[90vh] overflow-y-auto">
             <h2 className="text-lg font-semibold mb-4">Add New SKU</h2>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <div className={`grid grid-cols-2 gap-3 sm:grid-cols-3${saving ? " pointer-events-none opacity-50 select-none" : ""}`}>
               <div>
                 <label className="block text-sm font-medium text-foreground mb-1">Stone Type *</label>
                 <select value={form.stoneTypeId} onChange={(e) => setForm({ ...form, stoneTypeId: e.target.value, colorId: "" })}
@@ -418,9 +447,15 @@ export default function InventoryPage() {
               </div>
             </div>
             <div className="mt-4 flex justify-end gap-2">
-              <button onClick={() => { setShowForm(false); pendingPreviews.forEach((u) => URL.revokeObjectURL(u)); setPendingImages([]); setPendingPreviews([]); }} className="rounded-lg border px-4 py-2 text-sm hover:bg-accent">Cancel</button>
+              <button onClick={() => { setShowForm(false); pendingPreviews.forEach((u) => URL.revokeObjectURL(u)); setPendingImages([]); setPendingPreviews([]); }} disabled={saving} className="rounded-lg border px-4 py-2 text-sm hover:bg-accent disabled:pointer-events-none disabled:opacity-40">Cancel</button>
               <button onClick={handleSave} disabled={saving}
-                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60">
+                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60 flex items-center gap-2">
+                {saving && (
+                  <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                )}
                 {saving ? "Creating..." : "Create SKU"}
               </button>
             </div>
@@ -434,6 +469,7 @@ export default function InventoryPage() {
           <div className="w-full max-w-lg rounded-xl bg-card p-6 shadow-xl max-h-[90vh] overflow-y-auto">
             <h2 className="text-lg font-semibold mb-1">Edit SKU</h2>
             <p className="text-xs text-muted-foreground mb-4 font-mono">{editing.sku} — {editing.stoneType.name} · {editing.color.name} · {editing.grade.label}</p>
+            <div className={saving ? "pointer-events-none opacity-50 select-none" : ""}>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-sm font-medium text-foreground mb-1">Pcs</label>
@@ -533,11 +569,18 @@ export default function InventoryPage() {
                 </label>
               </div>
             </div>
+            </div>{/* end lock wrapper */}
             <p className="mt-3 text-xs text-muted-foreground/60">Note: SKU, stone type, shape, size, color and grade cannot be changed after creation.</p>
             <div className="mt-4 flex justify-end gap-2">
-              <button onClick={() => setEditing(null)} className="rounded-lg border px-4 py-2 text-sm hover:bg-accent">Cancel</button>
+              <button onClick={() => setEditing(null)} disabled={saving} className="rounded-lg border px-4 py-2 text-sm hover:bg-accent disabled:pointer-events-none disabled:opacity-40">Cancel</button>
               <button onClick={handleUpdate} disabled={saving}
-                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60">
+                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60 flex items-center gap-2">
+                {saving && (
+                  <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                )}
                 {saving ? "Saving..." : "Save Changes"}
               </button>
             </div>
@@ -568,77 +611,88 @@ export default function InventoryPage() {
           <div className="p-8 text-center text-sm text-muted-foreground/60">No items found. Add your first SKU above.</div>
         ) : (
           <table className="w-full text-sm">
-            <thead className="bg-muted/50 border-b">
-              <tr>
-                <th className="text-left px-4 py-3 font-medium text-muted-foreground">SKU</th>
-                <th className="text-left px-4 py-3 font-medium text-muted-foreground">Stone / Shape / Size</th>
-                <th className="text-left px-4 py-3 font-medium text-muted-foreground">Color</th>
-                <th className="text-center px-4 py-3 font-medium text-muted-foreground">Grade</th>
-                <th className="text-center px-4 py-3 font-medium text-muted-foreground">Qty</th>
-                <th className="text-right px-4 py-3 font-medium text-muted-foreground">Weight</th>
-                <th className="text-right px-4 py-3 font-medium text-muted-foreground">Selling ₹</th>
-                <th className="text-center px-4 py-3 font-medium text-muted-foreground">Catalog</th>
-                <th className="text-right px-4 py-3 font-medium text-muted-foreground">Actions</th>
+            <thead>
+              <tr className="bg-muted/60 border-b-2 border-border">
+                <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide">SKU</th>
+                <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide">Stone / Shape / Size</th>
+                <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide">Color</th>
+                <th className="text-center px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide">Grade</th>
+                <th className="text-center px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide">Qty</th>
+                <th className="text-right px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide">Weight</th>
+                <th className="text-right px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide">Selling ₹</th>
+                <th className="text-center px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide">Catalog</th>
+                <th className="text-right px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y">
+            <tbody className="divide-y divide-border/60">
               {paginated.map((item) => {
-                const isLow = item.qtyPieces > 0 && item.qtyPieces <= item.lowStockThreshold;
-                const isOut = item.qtyPieces === 0;
+                const isWeightTracked = item.weightPerPieceCarats != null || item.weightPerPieceGrams != null;
+                const isLow = !isWeightTracked && item.qtyPieces > 0 && item.qtyPieces <= item.lowStockThreshold;
+                const isOut = !isWeightTracked && item.qtyPieces === 0;
                 return (
-                  <tr key={item.id} className="hover:bg-accent">
+                  <tr key={item.id} className="hover:bg-accent/60 transition-colors group">
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2.5">
                         {item.images[0] ? (
-                          <img src={item.images[0].url} alt="" className="w-8 h-8 rounded object-cover flex-shrink-0 border border-border" />
+                          <img src={item.images[0].url} alt="" className="w-9 h-9 rounded-lg object-cover flex-shrink-0 border border-border shadow-sm" />
                         ) : (
-                          <div className="w-8 h-8 rounded bg-muted flex-shrink-0" />
+                          <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-muted to-muted/50 flex items-center justify-center flex-shrink-0 border border-border text-base">
+                            💎
+                          </div>
                         )}
-                        <span className="font-mono text-xs font-semibold text-foreground">{item.sku}</span>
+                        <span className="font-mono text-[11px] font-semibold text-foreground bg-muted/60 rounded px-1.5 py-0.5 leading-tight">{item.sku}</span>
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <div className="font-medium text-foreground">{item.stoneType.name}</div>
-                      <div className="text-xs text-muted-foreground/60">{item.shape.name} · {item.size.label}</div>
+                      <div className="font-semibold text-foreground text-sm">{item.stoneType.name}</div>
+                      <div className="text-xs text-muted-foreground mt-0.5">{item.shape.name} · {item.size.label}</div>
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-2">
                         {item.color.hexCode && (
-                          <span className="w-3 h-3 rounded-full border border-border flex-shrink-0" style={{ backgroundColor: item.color.hexCode }} />
+                          <span className="w-3.5 h-3.5 rounded-full border border-white shadow-sm flex-shrink-0" style={{ backgroundColor: item.color.hexCode }} />
                         )}
-                        <span className="text-foreground">{item.color.name}</span>
+                        <span className="text-sm text-foreground">{item.color.name}</span>
                       </div>
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <span className="inline-flex rounded-full bg-primary/10 text-primary px-2 py-0.5 text-xs font-medium">
+                      <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-bold ${gradeColor(item.grade.label)}`}>
                         {item.grade.label}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <span className={`font-semibold ${isOut ? "text-red-600" : isLow ? "text-amber-600" : "text-foreground"}`}>
-                        {item.qtyPieces}
-                      </span>
-                      {isLow && !isOut && <span className="ml-1 text-xs text-amber-500">⚠</span>}
-                      {isOut && <span className="ml-1 text-xs text-red-500">OUT</span>}
+                      {isOut ? (
+                        <span className="inline-flex items-center rounded-full bg-red-100 text-red-700 ring-1 ring-red-200 px-2.5 py-0.5 text-xs font-bold">OUT</span>
+                      ) : isLow ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 text-amber-700 ring-1 ring-amber-200 px-2.5 py-0.5 text-xs font-bold">
+                          ⚠ {item.qtyPieces}
+                        </span>
+                      ) : item.qtyPieces === 0 ? (
+                        <span className="text-muted-foreground/50">—</span>
+                      ) : (
+                        <span className="font-semibold text-foreground">{item.qtyPieces}</span>
+                      )}
                     </td>
-                    <td className="px-4 py-3 text-right text-muted-foreground text-sm">
+                    <td className="px-4 py-3 text-right">
                       {item.weightPerPieceCarats != null
-                        ? <span>{item.weightPerPieceCarats} <span className="text-xs">ct</span></span>
+                        ? <span className="text-sm text-foreground">{item.weightPerPieceCarats} <span className="text-xs text-muted-foreground">ct</span></span>
                         : item.weightPerPieceGrams != null
-                        ? <span>{item.weightPerPieceGrams} <span className="text-xs">g</span></span>
-                        : "—"}
+                        ? <span className="text-sm text-foreground">{item.weightPerPieceGrams} <span className="text-xs text-muted-foreground">g</span></span>
+                        : <span className="text-muted-foreground/50">—</span>}
                     </td>
-                    <td className="px-4 py-3 text-right text-muted-foreground">
-                      {item.sellingPriceEstimated ? `₹${item.sellingPriceEstimated.toLocaleString("en-IN")}` : "—"}
+                    <td className="px-4 py-3 text-right">
+                      {item.sellingPriceEstimated
+                        ? <span className="font-medium text-foreground">₹{item.sellingPriceEstimated.toLocaleString("en-IN")}</span>
+                        : <span className="text-muted-foreground/50">—</span>}
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <span className={`text-xs ${item.catalogVisible ? "text-green-600" : "text-muted-foreground/60"}`}>
-                        {item.catalogVisible ? "✓ Yes" : "Hidden"}
-                      </span>
+                      {item.catalogVisible
+                        ? <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 bg-emerald-50 rounded-full px-2 py-0.5 ring-1 ring-emerald-200">✓ Live</span>
+                        : <span className="text-xs text-muted-foreground/50">Hidden</span>}
                     </td>
                     <td className="px-4 py-3 text-right">
                       <button onClick={() => openEdit(item)}
-                        className="text-primary hover:underline text-xs font-medium">
+                        className="text-xs font-semibold text-primary bg-primary/10 hover:bg-primary/20 rounded-lg px-3 py-1.5 transition-colors opacity-0 group-hover:opacity-100">
                         Edit
                       </button>
                     </td>

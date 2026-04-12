@@ -18,7 +18,7 @@ interface Consignment {
   date: string;
   status: string;
   broker: { name: string };
-  lines: Array<{ qtyIssued: number; qtySold: number; estPricePerUnit: number }>;
+  lines: Array<{ qtyIssued: number; qtySold: number; qtyReturned: number; estPricePerUnit: number; meta: string | null }>;
   invoices: Array<{ amountTotal: number; amountPaid: number; status: string }>;
 }
 
@@ -38,6 +38,7 @@ export default function ConsignmentsPage() {
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [filterStatus, setFilterStatus] = useState("");
+  const [filterUnit, setFilterUnit] = useState<"all" | "pc" | "ct" | "mixed">("all");
   const [search, setSearch] = useState("");
   const _cnow = new Date(); const _cfy = _cnow.getMonth() >= 3 ? _cnow.getFullYear() : _cnow.getFullYear() - 1;
   const [dateRange, setDateRange] = useState<DateRange>({ from: `${_cfy}-04-01`, to: _cnow.toISOString().split("T")[0] });
@@ -80,6 +81,12 @@ export default function ConsignmentsPage() {
     setFormLines(updated);
   }
 
+  function closeForm() {
+    setShowForm(false);
+    setForm({ brokerId: "", date: new Date().toISOString().split("T")[0], notes: "" });
+    setFormLines([{ itemId: "", qtyIssued: 0, weightIssued: "", estPricePerUnit: 0, priceUnit: "per_pc", currency: "INR" }]);
+  }
+
   async function handleSave() {
     if (!form.brokerId) { toast.error("Please select a broker"); return; }
     if (formLines.some((l) => !l.itemId)) { toast.error("Please select an item for each line"); return; }
@@ -104,9 +111,7 @@ export default function ConsignmentsPage() {
     setSaving(false);
     if (res.ok) {
       toast.success("Consignment created");
-      setShowForm(false);
-      setForm({ brokerId: "", date: new Date().toISOString().split("T")[0], notes: "" });
-      setFormLines([{ itemId: "", qtyIssued: 0, weightIssued: "", estPricePerUnit: 0, priceUnit: "per_pc", currency: "INR" }]);
+      closeForm();
       loadConsignments();
     } else {
       const d = await res.json().catch(() => ({}));
@@ -115,13 +120,73 @@ export default function ConsignmentsPage() {
     }
   }
 
-  const totalValue = (c: Consignment) => c.lines.reduce((s, l) => s + l.qtyIssued * l.estPricePerUnit, 0);
+  const totalValue = (c: Consignment) => c.lines.reduce((s, l) => {
+    try {
+      const m = l.meta ? JSON.parse(l.meta) : null;
+      // Weight-tracked line: use weightIssued * price
+      if (m && (m.unit === "WEIGHT" || (!m.unit && m.priceUnit === "per_ct"))) {
+        return s + (Number(m.weightIssued) || 0) * l.estPricePerUnit;
+      }
+    } catch { /* ignore */ }
+    return s + l.qtyIssued * l.estPricePerUnit;
+  }, 0);
+
+  // Compute issued / pending summary text for list row
+  function linesSummary(c: Consignment): { issued: string; pending: string } {
+    let pcIssued = 0, pcPending = 0;
+    const wtIssued: Record<string, number> = {};
+    const wtPending: Record<string, number> = {};
+    for (const l of c.lines) {
+      try {
+        const m = l.meta ? JSON.parse(l.meta) : null;
+        const isWeight = m && (m.unit === "WEIGHT" || (!m.unit && m.priceUnit === "per_ct"));
+        if (isWeight) {
+          const u: string = m.weightUnit ?? "ct";
+          const wi = Number(m.weightIssued) || 0;
+          const ws = Number(m.weightSold) || 0;
+          const wr = Number(m.weightReturned) || 0;
+          wtIssued[u] = (wtIssued[u] || 0) + wi;
+          wtPending[u] = (wtPending[u] || 0) + (wi - ws - wr);
+        } else {
+          pcIssued += (l.qtyIssued || 0);
+          pcPending += (l.qtyIssued || 0) - (l.qtySold || 0) - (l.qtyReturned || 0);
+        }
+      } catch {
+        pcIssued += (l.qtyIssued || 0);
+        pcPending += (l.qtyIssued || 0) - (l.qtySold || 0) - (l.qtyReturned || 0);
+      }
+    }
+    const fmtWt = (map: Record<string, number>) =>
+      Object.entries(map).map(([u, v]) => `${+v.toFixed(3)}${u}`).join(" + ");
+    const parts = (pc: number, wt: Record<string, number>) => {
+      const p: string[] = [];
+      if (pc > 0 || Object.keys(wt).length === 0) p.push(`${pc} pc`);
+      const w = fmtWt(wt); if (w) p.push(w);
+      return p.join(" + ") || "0";
+    };
+    return { issued: parts(pcIssued, wtIssued), pending: parts(pcPending, wtPending) };
+  }
+
+  function consignmentUnitType(c: Consignment): "pc" | "ct" | "mixed" {
+    let hasPC = false, hasWT = false;
+    for (const l of c.lines) {
+      try {
+        const m = l.meta ? JSON.parse(l.meta) : null;
+        if (m && (m.unit === "WEIGHT" || (!m.unit && m.priceUnit === "per_ct"))) hasWT = true;
+        else hasPC = true;
+      } catch { hasPC = true; }
+    }
+    if (hasPC && hasWT) return "mixed";
+    if (hasWT) return "ct";
+    return "pc";
+  }
 
   const filtered = consignments.filter((c) => {
     const d = new Date(c.date);
     const inRange = d >= new Date(dateRange.from) && d <= new Date(`${dateRange.to}T23:59:59`);
     const matchSearch = !search || c.consignmentNo.toLowerCase().includes(search.toLowerCase()) || c.broker.name.toLowerCase().includes(search.toLowerCase());
-    return inRange && matchSearch;
+    const matchUnit = filterUnit === "all" || consignmentUnitType(c) === filterUnit;
+    return inRange && matchSearch && matchUnit;
   });
   const PAGE_SIZE = 10;
   const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -172,6 +237,15 @@ export default function ConsignmentsPage() {
           />
         </div>
         <div className="flex gap-2 flex-wrap items-center">
+          <span className="text-xs font-medium text-muted-foreground w-14 shrink-0">Unit</span>
+          {([["all", "All"], ["pc", "Pieces (pc)"], ["ct", "Weight (ct/g)"], ["mixed", "Mixed"]] as const).map(([val, label]) => (
+            <button key={val} onClick={() => { setFilterUnit(val); setPage(1); }}
+              className={`rounded-full px-3 py-1 text-xs border ${filterUnit === val ? "bg-primary text-primary-foreground border-primary" : "hover:bg-accent"}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="flex gap-2 flex-wrap items-center">
           <span className="text-xs font-medium text-muted-foreground w-14 shrink-0">Period</span>
           <DateRangePicker value={dateRange} onChange={(r) => { setDateRange(r); setPage(1); }} />
         </div>
@@ -188,13 +262,14 @@ export default function ConsignmentsPage() {
                 <p className="text-xs text-muted-foreground mt-0.5">Issue items to a broker for sale</p>
               </div>
               <button
-                onClick={() => setShowForm(false)}
-                className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:bg-accent transition-colors"
+                onClick={() => closeForm()}
+                disabled={saving}
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:bg-accent transition-colors disabled:pointer-events-none disabled:opacity-40"
               >✕</button>
             </div>
 
             {/* Body */}
-            <div className="overflow-y-auto flex-1 px-6 py-5 space-y-5">
+            <div className={`overflow-y-auto flex-1 px-6 py-5 space-y-5 transition-opacity${saving ? " pointer-events-none opacity-50 select-none" : ""}`}>
               {/* Broker + Date */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -371,14 +446,23 @@ export default function ConsignmentsPage() {
             {/* Footer */}
             <div className="flex gap-3 border-t px-6 py-4 shrink-0">
               <button
-                onClick={() => setShowForm(false)}
-                className="flex-1 rounded-xl border py-2.5 text-sm font-medium text-foreground hover:bg-accent transition-colors"
+                onClick={() => closeForm()}
+                disabled={saving}
+                className="flex-1 rounded-xl border py-2.5 text-sm font-medium text-foreground hover:bg-accent transition-colors disabled:pointer-events-none disabled:opacity-40"
               >Cancel</button>
               <button
                 onClick={handleSave}
                 disabled={saving}
-                className="flex-1 rounded-xl bg-primary py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-60 transition-colors"
-              >{saving ? "Creating…" : "Create Consignment"}</button>
+                className="flex-1 rounded-xl bg-primary py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-80 transition-colors flex items-center justify-center gap-2"
+              >
+                {saving && (
+                  <svg className="animate-spin h-4 w-4 text-primary-foreground" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                )}
+                {saving ? "Creating…" : "Create Consignment"}
+              </button>
             </div>
           </div>
         </div>
@@ -393,6 +477,8 @@ export default function ConsignmentsPage() {
                 <th className="text-left px-4 py-3 font-medium text-muted-foreground">Broker</th>
                 <th className="text-left px-4 py-3 font-medium text-muted-foreground">Date</th>
                 <th className="text-center px-4 py-3 font-medium text-muted-foreground">Items</th>
+                <th className="text-right px-4 py-3 font-medium text-muted-foreground">Issued</th>
+                <th className="text-right px-4 py-3 font-medium text-muted-foreground">Pending</th>
                 <th className="text-right px-4 py-3 font-medium text-muted-foreground">Est. Value</th>
                 <th className="text-center px-4 py-3 font-medium text-muted-foreground">Status</th>
                 <th className="text-right px-4 py-3 font-medium text-muted-foreground">Action</th>
@@ -405,6 +491,8 @@ export default function ConsignmentsPage() {
                   <td className="px-4 py-3.5"><div className="h-3 bg-muted rounded w-28" /></td>
                   <td className="px-4 py-3.5"><div className="h-3 bg-muted rounded w-24" /></td>
                   <td className="px-4 py-3.5"><div className="h-3 bg-muted rounded w-6 mx-auto" /></td>
+                  <td className="px-4 py-3.5"><div className="h-3 bg-muted rounded w-16 ml-auto" /></td>
+                  <td className="px-4 py-3.5"><div className="h-3 bg-muted rounded w-16 ml-auto" /></td>
                   <td className="px-4 py-3.5"><div className="h-3 bg-muted rounded w-20 ml-auto" /></td>
                   <td className="px-4 py-3.5"><div className="h-5 bg-muted rounded-full w-20 mx-auto" /></td>
                   <td className="px-4 py-3.5"><div className="h-3 bg-muted rounded w-12 ml-auto" /></td>
@@ -420,6 +508,8 @@ export default function ConsignmentsPage() {
                 <th className="text-left px-4 py-3 font-medium text-muted-foreground">Broker</th>
                 <th className="text-left px-4 py-3 font-medium text-muted-foreground">Date</th>
                 <th className="text-center px-4 py-3 font-medium text-muted-foreground">Items</th>
+                <th className="text-right px-4 py-3 font-medium text-muted-foreground">Issued</th>
+                <th className="text-right px-4 py-3 font-medium text-muted-foreground">Pending</th>
                 <th className="text-right px-4 py-3 font-medium text-muted-foreground">Est. Value</th>
                 <th className="text-center px-4 py-3 font-medium text-muted-foreground">Status</th>
                 <th className="text-right px-4 py-3 font-medium text-muted-foreground">Action</th>
@@ -427,13 +517,17 @@ export default function ConsignmentsPage() {
             </thead>
             <tbody className="divide-y">
               {filtered.length === 0 ? (
-                <tr><td colSpan={7} className="px-4 py-8 text-center text-sm text-muted-foreground/60">No consignments found</td></tr>
-              ) : paginated.map((c) => (
+                <tr><td colSpan={9} className="px-4 py-8 text-center text-sm text-muted-foreground/60">No consignments found</td></tr>
+              ) : paginated.map((c) => {
+                const { issued, pending } = linesSummary(c);
+                return (
                 <tr key={c.id} className="hover:bg-accent">
                   <td className="px-4 py-3 font-mono text-xs font-semibold">{c.consignmentNo}</td>
                   <td className="px-4 py-3 text-foreground">{c.broker.name}</td>
                   <td className="px-4 py-3 text-muted-foreground">{format(new Date(c.date), "dd MMM yyyy")}</td>
                   <td className="px-4 py-3 text-center">{c.lines.length}</td>
+                  <td className="px-4 py-3 text-right text-xs text-foreground">{issued}</td>
+                  <td className="px-4 py-3 text-right text-xs font-medium text-blue-600">{pending}</td>
                   <td className="px-4 py-3 text-right">₹{totalValue(c).toLocaleString("en-IN")}</td>
                   <td className="px-4 py-3 text-center">
                     <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[c.status] ?? ""}`}>
@@ -444,7 +538,8 @@ export default function ConsignmentsPage() {
                     <Link href={`/sales/consignments/${c.id}`} className="text-primary hover:underline text-xs">View →</Link>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         )}

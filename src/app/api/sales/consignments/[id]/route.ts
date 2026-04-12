@@ -99,12 +99,14 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
 
   const { soldLines, returnLines, updateLineMeta, ...data } = parsed.data;
 
-  const result = await db.$transaction(async (tx) => {
+  // Neon serverless recycles connections, making Prisma interactive transactions
+  // unreliable (Transaction not found). Use sequential ORM operations instead.
 
+  try {
     // ── Update per-line meta (unit / weight settings / notes) ──────────────
     if (updateLineMeta?.length) {
       for (const um of updateLineMeta) {
-        const [metaRow] = await tx.$queryRaw<Array<{ meta: string | null }>>`
+        const [metaRow] = await db.$queryRaw<Array<{ meta: string | null }>>`
           SELECT meta FROM "ConsignmentLine" WHERE id = ${um.lineId}
         `;
         const newMeta = {
@@ -114,7 +116,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
           ...(um.weightIssued !== undefined && { weightIssued: um.weightIssued }),
           ...(um.notes !== undefined && { notes: um.notes }),
         };
-        await tx.$executeRaw`
+        await db.$executeRaw`
           UPDATE "ConsignmentLine" SET meta = ${JSON.stringify(newMeta)} WHERE id = ${um.lineId}
         `;
       }
@@ -123,21 +125,20 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
     // ── Process sold lines ─────────────────────────────────────────────────
     if (soldLines?.length) {
       for (const sl of soldLines) {
-        const line = await tx.consignmentLine.findUnique({ where: { id: sl.lineId } });
+        const line = await db.consignmentLine.findUnique({ where: { id: sl.lineId } });
         if (!line) throw new Error(`Line ${sl.lineId} not found`);
-        const [metaRow] = await tx.$queryRaw<Array<{ meta: string | null }>>`
+        const [metaRow] = await db.$queryRaw<Array<{ meta: string | null }>>`
           SELECT meta FROM "ConsignmentLine" WHERE id = ${sl.lineId}
         `;
         const meta = parseMeta(metaRow?.meta ?? null);
 
-        // Piece-based validation (skip if it's a weight-only line)
         if (meta.unit !== "WEIGHT") {
           if (sl.qtySold < 1) throw new Error("Qty sold must be at least 1");
           const maxCanSell = line.qtyIssued - line.qtySold - line.qtyReturned;
           if (sl.qtySold > maxCanSell) {
             throw new Error(`Cannot mark ${sl.qtySold} as sold — only ${maxCanSell} pieces pending`);
           }
-          await tx.consignmentLine.update({
+          await db.consignmentLine.update({
             where: { id: sl.lineId },
             data: {
               qtySold: { increment: sl.qtySold },
@@ -145,24 +146,22 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
             },
           });
         } else {
-          // Weight-only: just update actualPricePerUnit if provided
           if (sl.actualPricePerUnit) {
-            await tx.consignmentLine.update({
+            await db.consignmentLine.update({
               where: { id: sl.lineId },
               data: { actualPricePerUnit: sl.actualPricePerUnit },
             });
           }
         }
 
-        // Update weight in meta if provided
         if (sl.weightSold !== undefined && sl.weightSold > 0) {
           const newMeta = { ...meta, weightSold: meta.weightSold + sl.weightSold };
-          await tx.$executeRaw`
+          await db.$executeRaw`
             UPDATE "ConsignmentLine" SET meta = ${JSON.stringify(newMeta)} WHERE id = ${sl.lineId}
           `;
         }
 
-        await tx.stockMovement.create({
+        await db.stockMovement.create({
           data: {
             itemId: line.itemId,
             movementType: "STOCK_OUT_DIRECT_SALE",
@@ -178,9 +177,9 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
     // ── Process returns ────────────────────────────────────────────────────
     if (returnLines?.length) {
       for (const rl of returnLines) {
-        const line = await tx.consignmentLine.findUnique({ where: { id: rl.lineId } });
+        const line = await db.consignmentLine.findUnique({ where: { id: rl.lineId } });
         if (!line) throw new Error(`Line ${rl.lineId} not found`);
-        const [metaRow] = await tx.$queryRaw<Array<{ meta: string | null }>>`
+        const [metaRow] = await db.$queryRaw<Array<{ meta: string | null }>>`
           SELECT meta FROM "ConsignmentLine" WHERE id = ${rl.lineId}
         `;
         const meta = parseMeta(metaRow?.meta ?? null);
@@ -191,25 +190,24 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
           if (rl.qtyReturned > maxCanReturn) {
             throw new Error(`Cannot return ${rl.qtyReturned} — only ${maxCanReturn} pieces pending`);
           }
-          await tx.consignmentLine.update({
+          await db.consignmentLine.update({
             where: { id: rl.lineId },
             data: { qtyReturned: { increment: rl.qtyReturned } },
           });
-          await tx.inventoryItem.update({
+          await db.inventoryItem.update({
             where: { id: line.itemId },
             data: { qtyPieces: { increment: rl.qtyReturned } },
           });
         }
 
-        // Update weight in meta if provided
         if (rl.weightReturned !== undefined && rl.weightReturned > 0) {
           const newMeta = { ...meta, weightReturned: meta.weightReturned + rl.weightReturned };
-          await tx.$executeRaw`
+          await db.$executeRaw`
             UPDATE "ConsignmentLine" SET meta = ${JSON.stringify(newMeta)} WHERE id = ${rl.lineId}
           `;
         }
 
-        await tx.stockMovement.create({
+        await db.stockMovement.create({
           data: {
             itemId: line.itemId,
             movementType: "RETURN_FROM_BROKER",
@@ -223,7 +221,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
     }
 
     // ── Fetch all lines with meta for status + invoice computation ─────────
-    const allLines = await tx.$queryRaw<Array<{
+    const allLines = await db.$queryRaw<Array<{
       qtyIssued: number; qtySold: number; qtyReturned: number;
       actualPricePerUnit: number | null; estPricePerUnit: number; meta: string | null;
     }>>`
@@ -239,7 +237,6 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
       const totalRet     = allLines.reduce((s, l) => s + l.qtyReturned, 0);
       const piecePending = totalIssued - totalSold - totalRet;
 
-      // Weight-based pending (for WEIGHT and BOTH lines)
       const weightPending = allLines.reduce((s, l) => {
         const m = parseMeta(l.meta);
         if (m.unit === "WEIGHT" || m.unit === "BOTH") {
@@ -248,7 +245,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
         return s;
       }, 0);
 
-      const existing = await tx.consignment.findUnique({ where: { id: params.id }, select: { status: true } });
+      const existing = await db.consignment.findUnique({ where: { id: params.id }, select: { status: true } });
       if (existing?.status !== "CLOSED") {
         if (piecePending > 0 || weightPending > 0.001) {
           newStatus = "ACTIVE";
@@ -265,14 +262,12 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
       const totalSoldAmount = allLines.reduce((s, l) => {
         const m = parseMeta(l.meta);
         const price = l.actualPricePerUnit ?? l.estPricePerUnit;
-        // Weight-based items: price × weightSold
         if (m.unit === "WEIGHT") return s + m.weightSold * price;
-        // BOTH and PC: price × qty
         return s + l.qtySold * price;
       }, 0);
 
       if (totalSoldAmount > 0) {
-        const conData = await tx.consignment.findUnique({
+        const conData = await db.consignment.findUnique({
           where: { id: params.id },
           select: { consignmentNo: true, invoices: { select: { id: true, amountPaid: true } } },
         });
@@ -282,7 +277,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
           if (!existingInv) {
             const dueDate = new Date();
             dueDate.setDate(dueDate.getDate() + 90);
-            await tx.invoice.create({
+            await db.invoice.create({
               data: {
                 invoiceNo: `INV-${conData.consignmentNo}`,
                 type: "CONSIGNMENT",
@@ -297,7 +292,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
           } else {
             const newInvStatus = existingInv.amountPaid >= roundedTotal ? "PAID"
               : existingInv.amountPaid > 0 ? "PARTIAL" : "PENDING";
-            await tx.invoice.update({
+            await db.invoice.update({
               where: { id: existingInv.id },
               data: { amountTotal: roundedTotal, status: newInvStatus },
             });
@@ -306,10 +301,14 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
       }
     }
 
-    return tx.consignment.update({
-      where: { id: params.id },
-      data: { status: newStatus, notes: data.notes },
-    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Database error";
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
+
+  const result = await db.consignment.update({
+    where: { id: params.id },
+    data: { status: data.status, notes: data.notes },
   });
 
   // Queue WhatsApp notification for broker on return

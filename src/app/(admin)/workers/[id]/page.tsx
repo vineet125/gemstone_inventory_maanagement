@@ -288,7 +288,7 @@ export default function WorkerDetailPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-sm rounded-xl bg-card p-6 shadow-xl">
             <h2 className="text-lg font-semibold mb-4">Record Attendance</h2>
-            <div className="space-y-3">
+            <div className={`space-y-3${saving ? " pointer-events-none opacity-50 select-none" : ""}`}>
               <div>
                 <label className="block text-sm font-medium text-foreground mb-1">Date *</label>
                 <input type="date" value={attForm.date} onChange={(e) => setAttForm({ ...attForm, date: e.target.value })}
@@ -310,9 +310,15 @@ export default function WorkerDetailPage() {
               </div>
             </div>
             <div className="mt-4 flex justify-end gap-2">
-              <button onClick={() => setShowAttModal(false)} className="rounded-lg border px-4 py-2 text-sm hover:bg-accent">Cancel</button>
+              <button onClick={() => setShowAttModal(false)} disabled={saving} className="rounded-lg border px-4 py-2 text-sm hover:bg-accent disabled:pointer-events-none disabled:opacity-40">Cancel</button>
               <button onClick={saveAttendance} disabled={saving}
-                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60">
+                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60 flex items-center justify-center gap-2">
+                {saving && (
+                  <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                )}
                 {saving ? "Saving..." : "Save"}
               </button>
             </div>
@@ -325,7 +331,7 @@ export default function WorkerDetailPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-xl bg-card p-6 shadow-xl">
             <h2 className="text-lg font-semibold mb-4">Record Piece Work</h2>
-            <div className="space-y-3">
+            <div className={`space-y-3${saving ? " pointer-events-none opacity-50 select-none" : ""}`}>
               <div>
                 <label className="block text-sm font-medium text-foreground mb-1">Date *</label>
                 <input type="date" value={pwForm.date} onChange={(e) => setPwForm({ ...pwForm, date: e.target.value })}
@@ -372,9 +378,15 @@ export default function WorkerDetailPage() {
               </div>
             </div>
             <div className="mt-4 flex justify-end gap-2">
-              <button onClick={() => setShowPwModal(false)} className="rounded-lg border px-4 py-2 text-sm hover:bg-accent">Cancel</button>
+              <button onClick={() => setShowPwModal(false)} disabled={saving} className="rounded-lg border px-4 py-2 text-sm hover:bg-accent disabled:pointer-events-none disabled:opacity-40">Cancel</button>
               <button onClick={savePieceWork} disabled={saving}
-                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60">
+                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60 flex items-center justify-center gap-2">
+                {saving && (
+                  <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                )}
                 {saving ? "Saving..." : "Save"}
               </button>
             </div>

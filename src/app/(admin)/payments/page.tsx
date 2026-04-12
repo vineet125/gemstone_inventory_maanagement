@@ -466,13 +466,14 @@ export default function PaymentsPage() {
               </div>
               <button
                 onClick={() => setShowRecord(null)}
-                className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+                disabled={saving}
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:bg-accent hover:text-foreground transition-colors disabled:pointer-events-none disabled:opacity-40"
               >
                 ✕
               </button>
             </div>
 
-            <div className="px-6 py-5 space-y-5">
+            <div className={`px-6 py-5 space-y-5${saving ? " pointer-events-none opacity-50 select-none" : ""}`}>
               {/* Invoice summary */}
               <div className="grid grid-cols-3 gap-3 rounded-xl bg-muted/40 p-4 text-center">
                 <div>
@@ -607,19 +608,26 @@ export default function PaymentsPage() {
             <div className="flex gap-3 border-t px-6 py-4">
               <button
                 onClick={() => setShowRecord(null)}
-                className="flex-1 rounded-xl border py-2.5 text-sm font-medium text-foreground hover:bg-accent transition-colors"
+                disabled={saving}
+                className="flex-1 rounded-xl border py-2.5 text-sm font-medium text-foreground hover:bg-accent transition-colors disabled:pointer-events-none disabled:opacity-40"
               >
                 Cancel
               </button>
               <button
                 onClick={recordPayment}
                 disabled={saving || !recordForm.amount || !recordForm.paymentDate}
-                className={`flex-1 rounded-xl py-2.5 text-sm font-semibold disabled:opacity-60 transition-colors ${
+                className={`flex-1 rounded-xl py-2.5 text-sm font-semibold disabled:opacity-60 transition-colors flex items-center justify-center gap-2 ${
                   isFullSettle
                     ? "bg-emerald-600 hover:bg-emerald-700 text-white"
                     : "bg-primary hover:bg-primary/90 text-primary-foreground"
                 }`}
               >
+                {saving && (
+                  <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                )}
                 {saving ? "Recording…" : isFullSettle ? "✓ Record & Settle" : "Record Payment"}
               </button>
             </div>

@@ -493,10 +493,11 @@ function SettleModal({
             <h2 className="font-bold text-foreground text-lg">Record Payment</h2>
             <p className="text-sm text-muted-foreground">{worker.name}</p>
           </div>
-          <button onClick={onClose} className="text-muted-foreground/60 hover:text-muted-foreground text-xl">✕</button>
+          <button onClick={onClose} disabled={saving} className="text-muted-foreground/60 hover:text-muted-foreground text-xl disabled:pointer-events-none disabled:opacity-40">✕</button>
         </div>
 
         <form onSubmit={submit} className="p-5 space-y-4">
+          <div className={`space-y-4${saving ? " pointer-events-none opacity-50 select-none" : ""}`}>
           {/* Period summary */}
           <div className="rounded-xl bg-muted/40 border p-4 space-y-2 text-sm">
             <div className="flex justify-between">
@@ -608,16 +609,23 @@ function SettleModal({
           </div>
 
           {error && <p className="text-sm text-red-600">{error}</p>}
+          </div>
 
           <div className="flex gap-3 pt-1">
-            <button type="button" onClick={onClose}
-              className="flex-1 rounded-lg border py-2.5 text-sm font-medium text-foreground hover:bg-accent">
+            <button type="button" onClick={onClose} disabled={saving}
+              className="flex-1 rounded-lg border py-2.5 text-sm font-medium text-foreground hover:bg-accent disabled:pointer-events-none disabled:opacity-40">
               Cancel
             </button>
             <button type="submit" disabled={saving}
-              className={`flex-1 rounded-lg py-2.5 text-sm font-bold text-white disabled:opacity-50 transition-colors ${
+              className={`flex-1 rounded-lg py-2.5 text-sm font-bold text-white disabled:opacity-50 transition-colors flex items-center justify-center gap-2 ${
                 isFullSettle ? "bg-green-600 hover:bg-green-700" : "bg-amber-500 hover:bg-amber-600"
               }`}>
+              {saving && (
+                <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+              )}
               {saving ? "Saving…" : isFullSettle ? `✓ Settle ₹${paid.toLocaleString()}` : `Pay ₹${paid.toLocaleString()}`}
             </button>
           </div>

@@ -41,7 +41,7 @@ export async function GET(req: NextRequest) {
     orderBy: { date: "desc" },
     include: {
       broker: { select: { name: true } },
-      lines: { select: { qtyIssued: true, qtySold: true, estPricePerUnit: true } },
+      lines: { select: { qtyIssued: true, qtySold: true, qtyReturned: true, estPricePerUnit: true, meta: true } },
       invoices: { select: { amountTotal: true, amountPaid: true, status: true } },
     },
   });
@@ -69,63 +69,77 @@ export async function POST(req: NextRequest) {
   const consignmentNo = nextConsignmentNo();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let consignment: any;
+  const metaUpdates: Array<{ lineId: string; meta: string }> = [];
 
+  // NOTE: Prisma interactive transactions are unreliable on Neon serverless
+  // (connection recycled between ops → "Transaction not found").
+  // Use sequential operations + manual rollback on failure instead.
   try {
-    consignment = await db.$transaction(async (tx) => {
-      const c = await tx.consignment.create({
-        data: {
-          consignmentNo,
-          brokerId: data.brokerId,
-          date: new Date(data.date),
-          status: "ACTIVE",
-          notes: data.notes,
-        },
-      });
-
-      // Create each line separately so we can update meta via raw SQL
-      for (const l of lines) {
-        const created = await (tx.consignmentLine as any).create({
-          data: {
-            consignmentId: c.id,
-            itemId: l.itemId,
-            qtyIssued: l.qtyIssued,
-            estPricePerUnit: l.estPricePerUnit,
-            currency: l.currency,
-          },
-        });
-
-        // Store weight + priceUnit in meta column via raw SQL
-        if (l.weightIssued != null || l.priceUnit !== "per_pc") {
-          const metaJson = JSON.stringify({ weightIssued: l.weightIssued, priceUnit: l.priceUnit });
-          try {
-            await tx.$executeRaw`UPDATE "ConsignmentLine" SET meta = ${metaJson} WHERE id = ${created.id}`;
-          } catch { /* meta column not yet migrated — ignored */ }
-        }
-
-        // Deduct stock (only if qty > 0)
-        if (l.qtyIssued > 0) {
-          await tx.inventoryItem.update({
-            where: { id: l.itemId },
-            data: { qtyPieces: { decrement: l.qtyIssued } },
-          });
-          await tx.stockMovement.create({
-            data: {
-              itemId: l.itemId,
-              movementType: "STOCK_OUT_CONSIGNMENT",
-              qtyChange: -l.qtyIssued,
-              referenceId: c.id,
-              referenceType: "CONSIGNMENT",
-              createdById: session!.user.id,
-            },
-          });
-        }
-      }
-
-      return c;
+    consignment = await db.consignment.create({
+      data: {
+        consignmentNo,
+        brokerId: data.brokerId,
+        date: new Date(data.date),
+        status: "ACTIVE",
+        notes: data.notes,
+      },
     });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "Database error";
     return NextResponse.json({ error: msg }, { status: 500 });
+  }
+
+  try {
+    for (const l of lines) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const created = await (db.consignmentLine as any).create({
+        data: {
+          consignmentId: consignment.id,
+          itemId: l.itemId,
+          qtyIssued: l.qtyIssued,
+          estPricePerUnit: l.estPricePerUnit,
+          currency: l.currency,
+        },
+      });
+
+      // Queue meta update — raw SQL, run after all ORM ops
+      if (l.weightIssued != null || l.priceUnit !== "per_pc") {
+        metaUpdates.push({
+          lineId: created.id,
+          meta: JSON.stringify({ weightIssued: l.weightIssued, priceUnit: l.priceUnit }),
+        });
+      }
+
+      // Deduct stock only for piece-issued lines
+      if (l.qtyIssued > 0) {
+        await db.inventoryItem.update({
+          where: { id: l.itemId },
+          data: { qtyPieces: { decrement: l.qtyIssued } },
+        });
+        await db.stockMovement.create({
+          data: {
+            itemId: l.itemId,
+            movementType: "STOCK_OUT_CONSIGNMENT",
+            qtyChange: -l.qtyIssued,
+            referenceId: consignment.id,
+            referenceType: "CONSIGNMENT",
+            createdById: session!.user.id,
+          },
+        });
+      }
+    }
+  } catch (err: unknown) {
+    // Rollback: delete the consignment (cascades to any created lines)
+    try { await db.consignment.delete({ where: { id: consignment.id } }); } catch { /* ignore */ }
+    const msg = err instanceof Error ? err.message : "Database error";
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
+
+  // Apply meta (weight/priceUnit) outside any transaction — non-critical
+  for (const { lineId, meta } of metaUpdates) {
+    try {
+      await db.$executeRaw`UPDATE "ConsignmentLine" SET meta = ${meta} WHERE id = ${lineId}`;
+    } catch { /* meta column not yet migrated — ignored */ }
   }
 
   // Queue WhatsApp notification for broker (non-blocking — never fail the response)
