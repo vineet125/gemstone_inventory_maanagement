@@ -13,6 +13,7 @@
     "db:studio": "prisma studio"
   },
   "dependencies": {
+    "@azure/storage-blob": "^12.31.0",
     "@cloudinary/react": "^1.13.0",
     "@hookform/resolvers": "^3.9.0",
     "@libsql/client": "^0.17.2",
