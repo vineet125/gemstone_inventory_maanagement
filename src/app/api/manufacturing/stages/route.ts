@@ -70,44 +70,27 @@ export async function POST(req: NextRequest) {
         costAmount: polishingCost ?? null,
         currency: polishingCurrency ?? "INR",
         qualityNotes: qualityNotes ?? null,
+        completionStatus: completionStatus ?? "PENDING",
+        defectPieces: defectPieces ?? 0,
+        defectNotes: defectNotes ?? null,
+        paidAmount: paidAmount ?? 0,
+        paidDate: paidDate ? new Date(paidDate) : null,
       },
     });
-
-    // Set new fields via raw SQL (Prisma client not yet regenerated)
-    const cs = completionStatus ?? "PENDING";
-    const dp = defectPieces ?? 0;
-    const pa = paidAmount ?? 0;
-    const dn = defectNotes ?? null;
-    const pd = paidDate ? new Date(paidDate) : null;
-    await db.$executeRaw`
-      UPDATE "PolishingRecord"
-      SET "completionStatus" = ${cs},
-          "defectPieces" = ${dp},
-          "defectNotes" = ${dn},
-          "paidAmount" = ${pa},
-          "paidDate" = ${pd}
-      WHERE "stageId" = ${stage.id}
-    `;
 
     // Queue WhatsApp for vendor
     const wa = await getWaSettings();
     if (wa.vendors) {
-      const [vendorRow] = await db.$queryRaw<Array<{ contactPhone: string | null; phoneWhatsapp: string | null; notifyWhatsapp: boolean }>>`
-        SELECT "contactPhone", "phoneWhatsapp", "notifyWhatsapp" FROM "PolishingVendor" WHERE id = ${vendorId}
-      `;
-      if (vendorRow?.notifyWhatsapp) {
-        const phone = vendorRow.phoneWhatsapp ?? vendorRow.contactPhone;
+      const vendor = await db.polishingVendor.findUnique({
+        where: { id: vendorId },
+        select: { contactPhone: true, phoneWhatsapp: true, notifyWhatsapp: true },
+      });
+      if (vendor?.notifyWhatsapp) {
+        const phone = vendor.phoneWhatsapp ?? vendor.contactPhone;
         if (phone) {
-          const [batchRow] = await db.$queryRaw<Array<{ batchNo: string }>>`
-            SELECT "batchNo" FROM "RoughBatch" WHERE id = ${data.batchId}
-          `;
+          const batch = await db.roughBatch.findUnique({ where: { id: data.batchId }, select: { batchNo: true } });
           const dateStr = new Date(dateSent).toLocaleDateString("en-IN");
-          await queueWhatsapp(
-            phone,
-            `Polishing job received: ${data.weightIn}g from PO ${batchRow?.batchNo ?? data.batchId} sent on ${dateStr}.`,
-            stage.id,
-            "STAGE_POLISHING_SEND"
-          );
+          await queueWhatsapp(phone, `Polishing job received: ${data.weightIn}g from PO ${batch?.batchNo ?? data.batchId} sent on ${dateStr}.`, stage.id, "STAGE_POLISHING_SEND");
         }
       }
     }
@@ -117,22 +100,12 @@ export async function POST(req: NextRequest) {
   if (workerIds?.length) {
     const wa = await getWaSettings();
     if (wa.workers) {
-      const users = await db.user.findMany({
-        where: { id: { in: workerIds } },
-        select: { phone: true },
-      });
-      const [batchRow] = await db.$queryRaw<Array<{ batchNo: string }>>`
-        SELECT "batchNo" FROM "RoughBatch" WHERE id = ${data.batchId}
-      `;
+      const users = await db.user.findMany({ where: { id: { in: workerIds } }, select: { phone: true } });
+      const batch = await db.roughBatch.findUnique({ where: { id: data.batchId }, select: { batchNo: true } });
       const entryDateStr = new Date(data.entryDate).toLocaleDateString("en-IN");
       for (const u of users) {
         if (u.phone) {
-          await queueWhatsapp(
-            u.phone,
-            `New job assigned: ${data.stage} on ${entryDateStr} for PO ${batchRow?.batchNo ?? data.batchId}. Report to office.`,
-            stage.id,
-            "STAGE_ASSIGNMENT"
-          );
+          await queueWhatsapp(u.phone, `New job assigned: ${data.stage} on ${entryDateStr} for PO ${batch?.batchNo ?? data.batchId}. Report to office.`, stage.id, "STAGE_ASSIGNMENT");
         }
       }
     }

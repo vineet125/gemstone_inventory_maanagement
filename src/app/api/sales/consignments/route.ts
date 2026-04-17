@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { requireAuth } from "@/lib/api-auth";
+import { requireAuth, resolveUserId } from "@/lib/api-auth";
 import { z } from "zod";
 import { queueWhatsapp, getWaSettings } from "@/lib/whatsapp";
 
@@ -51,6 +51,8 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const { error, session } = await requireAuth(["OWNER", "MANAGER", "STAFF"]);
   if (error) return error;
+  const createdById = await resolveUserId(session!.user.email!);
+  if (!createdById) return NextResponse.json({ error: "User not found" }, { status: 401 });
 
   const body = await req.json();
   const parsed = schema.safeParse(body);
@@ -71,9 +73,8 @@ export async function POST(req: NextRequest) {
   let consignment: any;
   const metaUpdates: Array<{ lineId: string; meta: string }> = [];
 
-  // NOTE: Prisma interactive transactions are unreliable on Neon serverless
-  // (connection recycled between ops → "Transaction not found").
-  // Use sequential operations + manual rollback on failure instead.
+  // Using sequential operations + manual rollback instead of db.$transaction
+  // to ensure compatibility across database providers.
   try {
     consignment = await db.consignment.create({
       data: {
@@ -123,7 +124,7 @@ export async function POST(req: NextRequest) {
             qtyChange: -l.qtyIssued,
             referenceId: consignment.id,
             referenceType: "CONSIGNMENT",
-            createdById: session!.user.id,
+            createdById,
           },
         });
       }
@@ -138,18 +139,19 @@ export async function POST(req: NextRequest) {
   // Apply meta (weight/priceUnit) outside any transaction — non-critical
   for (const { lineId, meta } of metaUpdates) {
     try {
-      await db.$executeRaw`UPDATE "ConsignmentLine" SET meta = ${meta} WHERE id = ${lineId}`;
-    } catch { /* meta column not yet migrated — ignored */ }
+      await db.consignmentLine.update({ where: { id: lineId }, data: { meta } });
+    } catch { /* ignored */ }
   }
 
   // Queue WhatsApp notification for broker (non-blocking — never fail the response)
   try {
     const wa = await getWaSettings();
     if (wa.brokers) {
-      const [brokerRow] = await db.$queryRaw<Array<{ phoneWhatsapp: string | null; notifyWhatsapp: boolean }>>`
-        SELECT "phoneWhatsapp", "notifyWhatsapp" FROM "Broker" WHERE id = ${data.brokerId}
-      `;
-      if (brokerRow?.notifyWhatsapp && brokerRow.phoneWhatsapp) {
+      const broker = await db.broker.findUnique({
+        where: { id: data.brokerId },
+        select: { phoneWhatsapp: true, notifyWhatsapp: true },
+      });
+      if (broker?.notifyWhatsapp && broker.phoneWhatsapp) {
         const totalQty = lines.reduce((sum, l) => sum + l.qtyIssued, 0);
         const totalWt = lines.reduce((sum, l) => sum + (l.weightIssued ?? 0), 0);
         const estTotal = lines.reduce((sum, l) => {
@@ -161,7 +163,7 @@ export async function POST(req: NextRequest) {
         const dateStr = new Date(data.date).toLocaleDateString("en-IN");
         const detail = [totalQty > 0 && `${totalQty} pcs`, totalWt > 0 && `${totalWt} ct`].filter(Boolean).join(", ");
         await queueWhatsapp(
-          brokerRow.phoneWhatsapp,
+          broker.phoneWhatsapp,
           `Consignment ${consignmentNo}: ${detail || "items"} issued to you on ${dateStr}. Est. value: ₹${Math.round(estTotal).toLocaleString("en-IN")}.${data.notes ? `\nNote: ${data.notes}` : ""}`,
           consignment.id,
           "CONSIGNMENT"

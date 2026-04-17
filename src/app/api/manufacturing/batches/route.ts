@@ -1,17 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { requireAuth } from "@/lib/api-auth";
+import { requireAuth, resolveUserId } from "@/lib/api-auth";
 import { z } from "zod";
 
 const schema = z.object({
   batchNo: z.string().optional(),
   stoneType: z.string().optional(),
   purchaseType: z.string().optional(),
-  supplierName: z.string().min(1),
-  purchaseDate: z.string(),
+  supplierName: z.string().min(1).max(200),
+  purchaseDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Invalid date format"),
   weightGrams: z.number().positive(),
   weightCarats: z.number().positive(),
-  costAmount: z.number().positive(),
+  costAmount: z.number().nonnegative().optional(),   // optional — STAFF may omit
   currency: z.string().default("INR"),
   notes: z.string().optional(),
 });
@@ -22,38 +22,27 @@ function nextPoNo() {
 }
 
 export async function GET() {
-  const { error } = await requireAuth();
-  if (error) return error;
+  try {
+    const { error } = await requireAuth();
+    if (error) return error;
 
-  const batches = await db.roughBatch.findMany({
-    orderBy: { createdAt: "desc" },
-    include: {
-      createdBy: { select: { name: true } },
-      stages: {
-        select: { stage: true, exitDate: true, weightIn: true },
-        orderBy: { entryDate: "asc" },
+    const batches = await db.roughBatch.findMany({
+      orderBy: { createdAt: "desc" },
+      include: {
+        createdBy: { select: { name: true } },
+        stages: {
+          select: { stage: true, exitDate: true, weightIn: true },
+          orderBy: { entryDate: "asc" },
+        },
+        _count: { select: { stages: true } },
       },
-      _count: { select: { stages: true } },
-    },
-  });
+    });
 
-  // Prisma client not yet regenerated — fetch stoneType and purchaseType via raw SQL
-  if (batches.length > 0) {
-    const ids = batches.map((b) => b.id);
-    const rows = await db.$queryRaw<Array<{ id: string; stoneType: string | null; purchaseType: string | null }>>`
-      SELECT id, "stoneType", "purchaseType" FROM "RoughBatch" WHERE id = ANY(${ids}::text[])
-    `;
-    const typeMap = new Map(rows.map((r) => [r.id, r]));
-    for (const batch of batches) {
-      const r = typeMap.get(batch.id);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (batch as any).stoneType = r?.stoneType ?? null;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (batch as any).purchaseType = r?.purchaseType ?? "ROUGH_COLLECTION";
-    }
+    return NextResponse.json(batches);
+  } catch (e: unknown) {
+    console.error("[GET /api/manufacturing/batches]", e);
+    return NextResponse.json({ error: "Server error" }, { status: 500 });
   }
-
-  return NextResponse.json(batches);
 }
 
 export async function POST(req: NextRequest) {
@@ -72,22 +61,26 @@ export async function POST(req: NextRequest) {
   if (exists) return NextResponse.json({ error: "Batch number already exists" }, { status: 409 });
 
   const { stoneType, purchaseType, batchNo: _bn, ...batchData } = parsed.data;
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const batch = await (db.roughBatch as any).create({
-    data: {
-      ...batchData,
-      batchNo,
-      purchaseDate: new Date(batchData.purchaseDate),
-      createdById: session!.user.id,
-    },
-  });
-
-  // Set stoneType and purchaseType via raw SQL (Prisma client may not yet be regenerated)
   const pt = purchaseType || "ROUGH_COLLECTION";
-  await db.$executeRaw`UPDATE "RoughBatch" SET "stoneType" = ${stoneType ?? null}, "purchaseType" = ${pt} WHERE id = ${batch.id}`;
-  batch.stoneType = stoneType ?? null;
-  batch.purchaseType = pt;
 
-  return NextResponse.json(batch, { status: 201 });
+  const createdById = await resolveUserId(session!.user.email!);
+  if (!createdById) return NextResponse.json({ error: "User not found" }, { status: 401 });
+
+  try {
+    const batch = await db.roughBatch.create({
+      data: {
+        ...batchData,
+        batchNo,
+        stoneType: stoneType ?? null,
+        purchaseType: pt,
+        costAmount: batchData.costAmount ?? 0,
+        purchaseDate: new Date(batchData.purchaseDate),
+        createdById,
+      },
+    });
+    return NextResponse.json(batch, { status: 201 });
+  } catch (e: unknown) {
+    console.error("[POST /api/manufacturing/batches]", e);
+    return NextResponse.json({ error: "Server error" }, { status: 500 });
+  }
 }

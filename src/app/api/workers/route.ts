@@ -16,6 +16,10 @@ const schema = z.object({
   notes: z.string().optional(),
 });
 
+function parseDepts(raw: string): string[] {
+  try { return JSON.parse(raw) as string[]; } catch { return []; }
+}
+
 export async function GET() {
   const { error } = await requireAuth();
   if (error) return error;
@@ -25,29 +29,7 @@ export async function GET() {
     include: { _count: { select: { pieceWork: true, attendance: true } } },
   });
 
-  // Fetch departments (new column) via raw SQL — column may not exist yet if db push not run
-  const ids = workers.map((w) => w.id);
-  let deptMap: Record<string, string[]> = {};
-  if (ids.length > 0) {
-    try {
-      const rows = await db.$queryRaw<Array<{ id: string; departments: string }>>`
-        SELECT id, departments FROM "Worker" WHERE id = ANY(${ids})
-      `;
-      deptMap = Object.fromEntries(
-        rows.map((r) => {
-          try { return [r.id, JSON.parse(r.departments) as string[]]; }
-          catch { return [r.id, []]; }
-        })
-      );
-    } catch { /* departments column not yet created — return empty */ }
-  }
-
-  const result = workers.map((w) => ({
-    ...w,
-    departments: deptMap[w.id] ?? [],
-  }));
-
-  return NextResponse.json(result);
+  return NextResponse.json(workers.map((w) => ({ ...w, departments: parseDepts(w.departments) })));
 }
 
 export async function POST(req: NextRequest) {
@@ -59,16 +41,12 @@ export async function POST(req: NextRequest) {
 
   const { departments, ...rest } = parsed.data;
   const worker = await db.worker.create({
-    data: { ...rest, joinDate: rest.joinDate ? new Date(rest.joinDate) : undefined },
+    data: {
+      ...rest,
+      joinDate: rest.joinDate ? new Date(rest.joinDate) : undefined,
+      departments: JSON.stringify(departments ?? []),
+    },
   });
-
-  // Write departments via raw SQL (graceful if column doesn't exist yet)
-  if (departments && departments.length > 0) {
-    try {
-      const deptJson = JSON.stringify(departments);
-      await db.$executeRaw`UPDATE "Worker" SET departments = ${deptJson} WHERE id = ${worker.id}`;
-    } catch { /* departments column not yet created — ignored */ }
-  }
 
   return NextResponse.json({ ...worker, departments: departments ?? [] }, { status: 201 });
 }

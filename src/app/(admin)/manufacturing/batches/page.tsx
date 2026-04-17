@@ -76,14 +76,16 @@ export default function BatchesPage() {
   const [batches, setBatches] = useState<Batch[]>([]);
   const [stoneTypes, setStoneTypes] = useState<StoneTypeOption[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const _bnow = new Date(); const _bfy = _bnow.getMonth() >= 3 ? _bnow.getFullYear() : _bnow.getFullYear() - 1;
   const [dateRange, setDateRange] = useState<DateRange>({ from: `${_bfy}-04-01`, to: _bnow.toISOString().split("T")[0] });
   const [page, setPage] = useState(1);
+  const todayStr = new Date().toISOString().split("T")[0];
   const [form, setForm] = useState({
     purchaseType: "ROUGH_COLLECTION",
-    stoneType: "", supplierName: "", purchaseDate: "",
+    stoneType: "", supplierName: "", purchaseDate: todayStr,
     weight: "", weightUnit: "g", costAmount: "", currency: "INR", notes: "",
   });
   const [editing, setEditing] = useState<Batch | null>(null);
@@ -121,7 +123,7 @@ export default function BatchesPage() {
     if (!editForm.supplierName) { toast.error("Supplier Name is required"); return; }
     if (!editForm.purchaseDate) { toast.error("Purchase Date is required"); return; }
     if (!editForm.weight || Number(editForm.weight) <= 0) { toast.error("Weight must be greater than 0"); return; }
-    if (!isStaff && (!editForm.costAmount || Number(editForm.costAmount) <= 0)) { toast.error("Cost Amount must be greater than 0"); return; }
+    if (!isStaff && (!editForm.costAmount || Number(editForm.costAmount) < 0)) { toast.error("Cost Amount must be 0 or greater"); return; }
 
     const wg = toGrams(editForm.weight, editForm.weightUnit);
     setSaving(true);
@@ -136,7 +138,7 @@ export default function BatchesPage() {
         purchaseDate: editForm.purchaseDate,
         weightGrams: wg,
         weightCarats: wg * 5,
-        costAmount: Number(editForm.costAmount),
+        ...(isStaff ? {} : { costAmount: Number(editForm.costAmount) }),
         currency: editForm.currency,
         notes: editForm.notes || undefined,
       }),
@@ -144,7 +146,8 @@ export default function BatchesPage() {
     setSaving(false);
     if (!res.ok) {
       const d = await res.json();
-      toast.error(d.error ?? "Failed to update order");
+      const msg = typeof d.error === "string" ? d.error : "Failed to update order";
+      toast.error(msg);
       return;
     }
     toast.success("Order updated");
@@ -153,13 +156,20 @@ export default function BatchesPage() {
   }
 
   async function load() {
-    const [bRes, stRes] = await Promise.all([
-      fetch("/api/manufacturing/batches"),
-      fetch("/api/catalog/stone-types"),
-    ]);
-    if (bRes.ok) setBatches(await bRes.json());
-    if (stRes.ok) setStoneTypes(await stRes.json());
-    setLoading(false);
+    setLoadError(false);
+    try {
+      const [bRes, stRes] = await Promise.all([
+        fetch("/api/manufacturing/batches"),
+        fetch("/api/settings/stone-types"),   // was /api/catalog/stone-types — wrong endpoint
+      ]);
+      if (!bRes.ok) throw new Error("batches fetch failed");
+      setBatches(await bRes.json());
+      if (stRes.ok) setStoneTypes(await stRes.json());
+    } catch {
+      setLoadError(true);
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => { load(); }, []);
@@ -168,7 +178,7 @@ export default function BatchesPage() {
     if (!form.supplierName) { toast.error("Supplier Name is required"); return; }
     if (!form.purchaseDate) { toast.error("Purchase Date is required"); return; }
     if (!form.weight || Number(form.weight) <= 0) { toast.error("Weight must be greater than 0"); return; }
-    if (!isStaff && (!form.costAmount || Number(form.costAmount) <= 0)) { toast.error("Cost Amount must be greater than 0"); return; }
+    if (!isStaff && (!form.costAmount || Number(form.costAmount) < 0)) { toast.error("Cost Amount must be 0 or greater"); return; }
 
     const wg = toGrams(form.weight, form.weightUnit);
     setSaving(true);
@@ -182,7 +192,7 @@ export default function BatchesPage() {
         purchaseDate: form.purchaseDate,
         weightGrams: wg,
         weightCarats: wg * 5,
-        costAmount: Number(form.costAmount),
+        ...(isStaff ? {} : { costAmount: Number(form.costAmount) }),
         currency: form.currency,
         notes: form.notes || undefined,
       }),
@@ -191,7 +201,8 @@ export default function BatchesPage() {
     if (!res.ok) {
       setSaving(false);
       const d = await res.json();
-      toast.error(d.error ?? "Something went wrong");
+      const msg = typeof d.error === "string" ? d.error : "Something went wrong";
+      toast.error(msg);
       return;
     }
 
@@ -199,7 +210,7 @@ export default function BatchesPage() {
 
     // Auto-create initial stage entry for non-rough purchase types
     if (form.purchaseType !== "ROUGH_COLLECTION") {
-      await fetch("/api/manufacturing/stages", {
+      const stageRes = await fetch("/api/manufacturing/stages", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -209,12 +220,15 @@ export default function BatchesPage() {
           weightIn: wg,
         }),
       });
+      if (!stageRes.ok) {
+        toast.warning("Order created, but initial stage could not be added. Please add it manually.");
+      }
     }
 
     setSaving(false);
     toast.success("Purchase order created");
     setShowForm(false);
-    setForm({ purchaseType: "ROUGH_COLLECTION", stoneType: "", supplierName: "", purchaseDate: "", weight: "", weightUnit: "g", costAmount: "", currency: "INR", notes: "" });
+    setForm({ purchaseType: "ROUGH_COLLECTION", stoneType: "", supplierName: "", purchaseDate: todayStr, weight: "", weightUnit: "g", costAmount: "", currency: "INR", notes: "" });
     load();
   }
 
@@ -304,12 +318,12 @@ export default function BatchesPage() {
               <div className="col-span-2">
                 <label className="block text-sm font-medium text-foreground mb-1">Supplier Name *</label>
                 <input value={form.supplierName} onChange={(e) => setForm({ ...form, supplierName: e.target.value })}
-                  className="w-full rounded-lg border border-border px-3 py-2 text-sm" placeholder="Supplier name" />
+                  maxLength={200} className="w-full rounded-lg border border-border px-3 py-2 text-sm" placeholder="Supplier name" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-foreground mb-1">Weight *</label>
                 <input type="number" value={form.weight} onChange={(e) => setForm({ ...form, weight: e.target.value })}
-                  className="w-full rounded-lg border border-border px-3 py-2 text-sm" placeholder="500" />
+                  min="0" step="0.001" className="w-full rounded-lg border border-border px-3 py-2 text-sm" placeholder="500" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-foreground mb-1">Unit</label>
@@ -444,7 +458,12 @@ export default function BatchesPage() {
       )}
 
       <div className="rounded-xl border bg-card shadow-sm overflow-hidden">
-        {loading ? (
+        {loadError ? (
+          <div className="py-12 text-center space-y-3">
+            <p className="text-sm text-destructive font-medium">Failed to load purchase orders.</p>
+            <button onClick={load} className="rounded-lg border px-4 py-2 text-sm hover:bg-accent transition-colors">Retry</button>
+          </div>
+        ) : loading ? (
           <table className="w-full text-sm">
             <thead className="bg-muted/50 border-b">
               <tr>

@@ -43,23 +43,6 @@ export async function GET(req: NextRequest) {
 
   let totalPresent = 0, totalAbsent = 0, totalPieces = 0, totalWages = 0;
 
-  // Fetch departments for all workers via raw SQL (graceful if column doesn't exist yet)
-  const workerIds = workers.map((w) => w.id);
-  let deptMap: Record<string, string[]> = {};
-  if (workerIds.length > 0) {
-    try {
-      const deptRows = await db.$queryRaw<Array<{ id: string; departments: string }>>`
-        SELECT id, departments FROM "Worker" WHERE id = ANY(${workerIds})
-      `;
-      deptMap = Object.fromEntries(
-        deptRows.map((r) => {
-          try { return [r.id, JSON.parse(r.departments) as string[]]; }
-          catch { return [r.id, []]; }
-        })
-      );
-    } catch { /* departments column not yet created — return empty */ }
-  }
-
   const result = workers.map((w) => {
     const att = w.attendance[0] ?? null;
 
@@ -99,7 +82,7 @@ export async function GET(req: NextRequest) {
       phone: w.phone,
       payType: w.payType,
       dailyWageRate: w.dailyWageRate,
-      departments: deptMap[w.id] ?? [],
+      departments: (() => { try { return JSON.parse(w.departments) as string[]; } catch { return []; } })(),
       attendance: att
         ? { id: att.id, status: att.status, inTime: attInTime, outTime: attOutTime }
         : null,

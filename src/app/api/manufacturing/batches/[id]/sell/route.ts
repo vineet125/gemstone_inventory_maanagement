@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { requireAuth } from "@/lib/api-auth";
+import { requireAuth, resolveUserId } from "@/lib/api-auth";
 import { z } from "zod";
 
 const schema = z.object({
@@ -41,6 +41,8 @@ function generateSku(type: string, shape: string, size: string, color: string, g
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const { error, session } = await requireAuth(["OWNER", "MANAGER", "STAFF"]);
   if (error) return error;
+  const createdById = await resolveUserId(session!.user.email!);
+  if (!createdById) return NextResponse.json({ error: "User not found" }, { status: 401 });
 
   const batch = await db.roughBatch.findUnique({ where: { id: params.id } });
   if (!batch) return NextResponse.json({ error: "Batch not found" }, { status: 404 });
@@ -141,7 +143,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           qtyChange: -qtyPieces,
           referenceId: s.id,
           referenceType: "DIRECT_SALE",
-          createdById: session!.user.id,
+          createdById,
         },
       });
 
@@ -169,7 +171,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           qtyChange: -qtyPieces,
           referenceId: c.id,
           referenceType: "CONSIGNMENT",
-          createdById: session!.user.id,
+          createdById,
         },
       });
 

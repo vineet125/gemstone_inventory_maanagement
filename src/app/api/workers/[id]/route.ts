@@ -32,11 +32,16 @@ const pieceWorkSchema = z.object({
   notes: z.string().optional(),
 });
 
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+function parseDepts(raw: string): string[] {
+  try { return JSON.parse(raw) as string[]; } catch { return []; }
+}
+
+export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { error } = await requireAuth();
   if (error) return error;
+  const { id } = await params;
   const worker = await db.worker.findUnique({
-    where: { id: params.id },
+    where: { id },
     include: {
       pieceRates: true,
       attendance: { orderBy: { date: "desc" }, take: 31 },
@@ -44,35 +49,13 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     },
   });
   if (!worker) return NextResponse.json({ error: "Not found" }, { status: 404 });
-
-  // Fetch notifyWhatsapp + departments via raw SQL (Prisma client not regenerated)
-  try {
-    const [wRow] = await db.$queryRaw<Array<{ notifyWhatsapp: boolean; departments: string }>>`
-      SELECT "notifyWhatsapp", departments FROM "Worker" WHERE id = ${params.id}
-    `;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (worker as any).notifyWhatsapp = wRow?.notifyWhatsapp ?? true;
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (worker as any).departments = JSON.parse(wRow?.departments ?? "[]") as string[];
-    } catch {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (worker as any).departments = [];
-    }
-  } catch {
-    // departments column not yet created — use defaults
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (worker as any).notifyWhatsapp = true;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (worker as any).departments = [];
-  }
-
-  return NextResponse.json(worker);
+  return NextResponse.json({ ...worker, departments: parseDepts(worker.departments) });
 }
 
-export async function PUT(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { error } = await requireAuth(["OWNER", "MANAGER"]);
   if (error) return error;
+  const { id } = await params;
   const body = await req.json();
 
   // Handle attendance recording
@@ -80,9 +63,9 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
     const parsed = attendanceSchema.safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
     const att = await db.workerAttendance.upsert({
-      where: { workerId_date: { workerId: params.id, date: new Date(parsed.data.date) } },
+      where: { workerId_date: { workerId: id, date: new Date(parsed.data.date) } },
       update: { status: parsed.data.status, notes: parsed.data.notes },
-      create: { workerId: params.id, date: new Date(parsed.data.date), status: parsed.data.status, notes: parsed.data.notes },
+      create: { workerId: id, date: new Date(parsed.data.date), status: parsed.data.status, notes: parsed.data.notes },
     });
     return NextResponse.json(att);
   }
@@ -92,7 +75,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
     const parsed = pieceWorkSchema.safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
     const pw = await db.workerPieceWork.create({
-      data: { workerId: params.id, ...parsed.data, date: new Date(parsed.data.date) },
+      data: { workerId: id, ...parsed.data, date: new Date(parsed.data.date) },
     });
     return NextResponse.json(pw);
   }
@@ -100,14 +83,13 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
   const parsed = schema.safeParse(body);
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   const { departments, ...rest } = parsed.data;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const worker = await (db.worker as any).update({ where: { id: params.id }, data: rest });
-  // Write departments via raw SQL when provided (graceful if column doesn't exist yet)
-  if (departments !== undefined) {
-    try {
-      const deptJson = JSON.stringify(departments);
-      await db.$executeRaw`UPDATE "Worker" SET departments = ${deptJson} WHERE id = ${params.id}`;
-    } catch { /* departments column not yet created — ignored */ }
-  }
-  return NextResponse.json({ ...worker, departments: departments ?? [] });
+
+  const worker = await db.worker.update({
+    where: { id },
+    data: {
+      ...rest,
+      ...(departments !== undefined && { departments: JSON.stringify(departments) }),
+    },
+  });
+  return NextResponse.json({ ...worker, departments: parseDepts(worker.departments) });
 }

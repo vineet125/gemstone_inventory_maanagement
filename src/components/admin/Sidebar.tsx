@@ -18,6 +18,7 @@ const navItems = [
     { href: "/manufacturing/polishing",label: "Polishing" },
   ]},
   { href: "/inventory",           label: "Inventory",       icon: "📦" },
+  { href: "/transactions",        label: "Transactions",    icon: "🔄" },
   { href: "/sales",               label: "Sales",           icon: "🤝", children: [
     { href: "/sales/consignments", label: "Consignments" },
     { href: "/sales/direct",       label: "Direct Sales" },
@@ -27,6 +28,8 @@ const navItems = [
   { href: "/reports",             label: "Reports",         icon: "📄" },
   { href: "/settings",            label: "Settings",        icon: "⚙️", children: [
     { href: "/settings/catalog",         label: "Catalog Setup" },
+    { href: "/settings/catalog-items",   label: "Catalog Items" },
+    { href: "/settings/stone-types",     label: "Stone Types" },
     { href: "/settings/notifications",   label: "WhatsApp Notifications" },
   ]},
 ];

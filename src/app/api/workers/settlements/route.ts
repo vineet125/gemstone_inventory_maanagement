@@ -148,17 +148,10 @@ export async function POST(req: NextRequest) {
       paidAmount,
       notes: notes ?? null,
       settledBy: session.user?.name ?? null,
+      paymentMode: paymentMode ?? "CASH",
+      paymentDate: paymentDate ? new Date(paymentDate) : new Date(),
     },
   });
-
-  // Set paymentMode + paymentDate via raw SQL (new columns, Prisma client not regenerated)
-  const mode = paymentMode ?? "CASH";
-  const pd = paymentDate ? new Date(paymentDate) : new Date();
-  await db.$executeRaw`
-    UPDATE "WorkerSettlement"
-    SET "paymentMode" = ${mode}, "paymentDate" = ${pd}
-    WHERE id = ${settlement.id}
-  `;
 
   return NextResponse.json(settlement, { status: 201 });
 }

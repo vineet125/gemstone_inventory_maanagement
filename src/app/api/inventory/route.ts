@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { requireAuth } from "@/lib/api-auth";
+import { requireAuth, resolveUserId } from "@/lib/api-auth";
 import { z } from "zod";
 
 const schema = z.object({
@@ -64,6 +64,8 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const { error, session } = await requireAuth(["OWNER", "MANAGER", "STAFF"]);
   if (error) return error;
+  const createdById = await resolveUserId(session!.user.email!);
+  if (!createdById) return NextResponse.json({ error: "User not found" }, { status: 401 });
 
   const body = await req.json();
   const parsed = schema.safeParse(body);
@@ -96,7 +98,7 @@ export async function POST(req: NextRequest) {
         movementType: "STOCK_IN_PURCHASE",
         qtyChange: parsed.data.qtyPieces,
         notes: "Initial stock entry",
-        createdById: session!.user.id,
+        createdById,
       },
     });
   }

@@ -16,28 +16,17 @@ const schema = z.object({
 export async function GET() {
   const { error } = await requireAuth();
   if (error) return error;
-  const vendors = await db.polishingVendor.findMany({
-    orderBy: { name: "asc" },
-    include: { _count: { select: { records: true } } },
-  });
 
-  // Fetch new fields via raw SQL (Prisma client not yet regenerated)
-  if (vendors.length > 0) {
-    const ids = vendors.map((v) => v.id);
-    const rows = await db.$queryRaw<Array<{ id: string; phoneWhatsapp: string | null; notifyWhatsapp: boolean }>>`
-      SELECT id, "phoneWhatsapp", "notifyWhatsapp" FROM "PolishingVendor" WHERE id = ANY(${ids}::text[])
-    `;
-    const rowMap = new Map(rows.map((r) => [r.id, r]));
-    for (const v of vendors) {
-      const r = rowMap.get(v.id);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (v as any).phoneWhatsapp = r?.phoneWhatsapp ?? null;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (v as any).notifyWhatsapp = r?.notifyWhatsapp ?? true;
-    }
+  try {
+    const vendors = await db.polishingVendor.findMany({
+      orderBy: { name: "asc" },
+      include: { _count: { select: { records: true } } },
+    });
+    return NextResponse.json(vendors);
+  } catch (e: unknown) {
+    console.error("[GET /api/manufacturing/polishing-vendors]", e);
+    return NextResponse.json({ error: "Server error" }, { status: 500 });
   }
-
-  return NextResponse.json(vendors);
 }
 
 export async function POST(req: NextRequest) {
@@ -46,7 +35,6 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const parsed = schema.safeParse(body);
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const vendor = await (db.polishingVendor as any).create({ data: parsed.data });
+  const vendor = await db.polishingVendor.create({ data: parsed.data });
   return NextResponse.json(vendor, { status: 201 });
 }

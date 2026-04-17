@@ -28,36 +28,26 @@ export async function GET(req: NextRequest) {
 
   if (!settlements.length) return NextResponse.json([]);
 
-  // Fetch paymentMode + paymentDate via raw SQL (new columns)
-  const ids = settlements.map((s) => s.id);
-  const extras = await db.$queryRaw<Array<{ id: string; paymentMode: string | null; paymentDate: Date | null }>>`
-    SELECT id, "paymentMode", "paymentDate" FROM "WorkerSettlement" WHERE id = ANY(${ids})
-  `;
-  const extraMap = new Map(extras.map((e) => [e.id, e]));
-
   return NextResponse.json(
-    settlements.map((s) => {
-      const ex = extraMap.get(s.id);
-      return {
-        id: s.id,
-        workerId: s.workerId,
-        workerName: s.worker.name,
-        fromDate: s.fromDate.toISOString().split("T")[0],
-        toDate: s.toDate.toISOString().split("T")[0],
-        daysPresent: s.daysPresent,
-        halfDays: s.halfDays,
-        totalPieces: s.totalPieces,
-        wagesAmount: s.wagesAmount,
-        pieceAmount: s.pieceAmount,
-        totalAmount: s.totalAmount,
-        paidAmount: s.paidAmount,
-        balance: Math.round(s.totalAmount - s.paidAmount),
-        notes: s.notes,
-        settledBy: s.settledBy,
-        paymentMode: ex?.paymentMode ?? "CASH",
-        paymentDate: ex?.paymentDate ? ex.paymentDate.toISOString().split("T")[0] : null,
-        createdAt: s.createdAt.toISOString(),
-      };
-    })
+    settlements.map((s) => ({
+      id: s.id,
+      workerId: s.workerId,
+      workerName: s.worker.name,
+      fromDate: s.fromDate.toISOString().split("T")[0],
+      toDate: s.toDate.toISOString().split("T")[0],
+      daysPresent: s.daysPresent,
+      halfDays: s.halfDays,
+      totalPieces: s.totalPieces,
+      wagesAmount: s.wagesAmount,
+      pieceAmount: s.pieceAmount,
+      totalAmount: s.totalAmount,
+      paidAmount: s.paidAmount,
+      balance: Math.round(s.totalAmount - s.paidAmount),
+      notes: s.notes,
+      settledBy: s.settledBy,
+      paymentMode: s.paymentMode ?? "CASH",
+      paymentDate: s.paymentDate ? s.paymentDate.toISOString().split("T")[0] : null,
+      createdAt: s.createdAt.toISOString(),
+    }))
   );
 }

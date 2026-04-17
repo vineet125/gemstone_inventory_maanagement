@@ -1,4 +1,5 @@
 import { auth } from "@/auth";
+import { db } from "@/lib/db";
 import { NextResponse } from "next/server";
 
 export type AllowedRole = "OWNER" | "MANAGER" | "ACCOUNTANT" | "STAFF" | "WORKER";
@@ -25,4 +26,13 @@ export async function requireAuth(allowedRoles?: AllowedRole[]) {
   }
 
   return { error: null, session };
+}
+
+/**
+ * Resolve the real DB user id by email.
+ * JWT tokens can have stale user.id — looking up by email is always correct.
+ */
+export async function resolveUserId(email: string): Promise<string | null> {
+  const user = await db.user.findUnique({ where: { email }, select: { id: true } });
+  return user?.id ?? null;
 }
